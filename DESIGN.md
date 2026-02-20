@@ -13,11 +13,12 @@
 9. [Program Flow - Bank Server](#9-program-flow--bank-server)
 10. [Program Flow - ATM Client](#10-program-flow--atm-client)
 11. [Threat Model & Attack Mitigations](#11-threat-model--attack-mitigations)
-12. [Project Layout - Go](#12-project-layout--go)
-13. [Project Layout - C++](#13-project-layout--c)
-14. [Crypto Library Discussion](#14-crypto-library-discussion)
-15. [JSON Output Formatting](#15-json-output-formatting)
-16. [Error Handling Summary](#16-error-handling-summary)
+12. [Design Rationale — Why These Choices, What Could Be Simpler](#12-design-rationale--why-these-choices-what-could-be-simpler)
+13. [Project Layout - Go](#13-project-layout--go)
+14. [Project Layout - C++](#14-project-layout--c)
+15. [Crypto Library Discussion](#15-crypto-library-discussion)
+16. [JSON Output Formatting](#16-json-output-formatting)
+17. [Error Handling Summary](#17-error-handling-summary)
 
 ---
 
@@ -652,7 +653,312 @@ Public-key crypto (RSA, ECDH) would be needed if we had to establish a shared se
 
 ---
 
-## 12. Project Layout - Go
+## 12. Design Rationale — Why These Choices, What Could Be Simpler
+
+This section walks through the reasoning behind each design decision step-by-step, explains where simpler alternatives would suffice, identifies which parts are genuinely essential vs. defence-in-depth, and pays particular attention to **card file uniqueness in a distributed setting** and **why each mechanism exists to counter a specific attack**.
+
+---
+
+### 12.1 The Core Insight: A Pre-Shared Secret Changes Everything
+
+The single most important observation is that we already **have** a pre-shared secret — the auth file, distributed over a trusted out-of-band channel. This eliminates the hardest problem in cryptography (key distribution) and means:
+
+> We do **not** need public-key cryptography (RSA, ECDH, certificates, TLS handshakes). Symmetric crypto alone is sufficient and provably secure.
+
+Step-by-step reasoning:
+
+1. **TLS/HTTPS requires a certificate infrastructure** — the server presents a certificate, signed by a CA, to prove its identity. We have no CA. We have something better: a shared secret that both sides already trust.
+2. **Diffie-Hellman key exchange** solves the problem of establishing a shared secret over an insecure channel. We already have one. Using DH would add complexity (group parameter selection, ephemeral key generation, protection against small-subgroup attacks) with zero security benefit.
+3. **AES-256 with a pre-shared key** gives us 256-bit symmetric security. To achieve equivalent security with RSA, you would need a 15360-bit key. With ECDH, you would need a P-521 curve. The symmetric path is simpler, faster, and equally secure.
+
+**Verdict:** Symmetric-only design is not a shortcut — it is the _correct_ choice given the threat model.
+
+---
+
+### 12.2 Could We Use Something Even Simpler Than AES-GCM?
+
+Let us examine what is strictly necessary and what is defence-in-depth.
+
+#### What the attacker can do (recap)
+
+The MITM can: **(a)** read all bytes on the wire, **(b)** modify bytes in transit, **(c)** inject entirely new messages, **(d)** replay old messages, **(e)** reorder messages, **(f)** delay or drop messages.
+
+#### Minimal sufficient crypto
+
+| Need                | Minimal solution                    | What we chose                   | Why                                                                |
+| ------------------- | ----------------------------------- | ------------------------------- | ------------------------------------------------------------------ |
+| Confidentiality (a) | AES-256-CBC + random IV per message | AES-256-GCM                     | GCM gives us authentication for free                               |
+| Integrity (b)       | HMAC-SHA256 over plaintext          | GCM tag (128-bit)               | Integrated AEAD is less error-prone than Encrypt-then-MAC manually |
+| Anti-forgery (c)    | HMAC-SHA256 with shared key         | GCM tag + shared key            | Same mechanism                                                     |
+| Anti-replay (d)     | Sequence numbers OR nonces          | Sequence numbers + random nonce | Belt and suspenders                                                |
+| Anti-reorder (e)    | Monotonic sequence counter          | Monotonic sequence counter      | Minimal and sufficient                                             |
+| Anti-delay (f)      | 10-second timeout                   | 10-second timeout               | Spec requirement                                                   |
+
+**Could we just use AES-CBC + HMAC-SHA256 (Encrypt-then-MAC)?**
+
+Yes. This is provably secure and was the standard before AEAD modes existed. The steps would be:
+
+1. Encrypt plaintext with AES-256-CBC using a random IV
+2. Compute `HMAC-SHA256(K_mac, IV || ciphertext)`
+3. Send `IV || ciphertext || HMAC`
+4. Receiver: verify HMAC first, then decrypt
+
+This would be perfectly safe. We chose AES-GCM instead because:
+
+- **One primitive, one call** — GCM does encrypt + authenticate in a single pass, reducing implementation surface for bugs
+- **Associated data** — GCM's AAD input lets us bind the sequence number and metadata to the ciphertext without encrypting them
+- **Performance** — GCM is a single-pass stream mode; CBC requires padding and multi-block processing
+
+**Could we skip encryption entirely and just use HMAC?**
+
+If we only cared about authentication and integrity (not confidentiality), we could send `plaintext || HMAC-SHA256(K_mac, plaintext)`. The attacker could _read_ balances and transaction amounts but could not forge or replay. However, the spec says the MITM can "observe" traffic and we should protect customer information, so **confidentiality is required**. Plain HMAC alone is insufficient.
+
+#### The outer HMAC — overkill or justified?
+
+Our wire frame has an HMAC-SHA256 _over_ the already-authenticated GCM ciphertext. Is this redundant?
+
+**Strictly speaking, yes.** AES-GCM's authentication tag already provides integrity and authentication. The outer HMAC is defence-in-depth:
+
+- It protects against hypothetical GCM implementation bugs (nonce-reuse catastrophes, tag truncation bugs)
+- It binds the unencrypted header fields (sequence number, timestamp) into the authentication even if someone forgets to put them in GCM's AAD
+- It costs ~200ns per message — negligible for a protocol that does 1-3 messages per connection
+
+**A simpler design could drop the outer HMAC entirely and just use AES-GCM with the sequence number + timestamp as AAD.** This is what TLS 1.3 does. Our design keeps the outer HMAC as a safety net, but it is not strictly necessary.
+
+---
+
+### 12.3 Card File Uniqueness — The Key Design Problem
+
+> **The central challenge:** Every card file must be unique per account, unforgeable without the auth file, and must work in a distributed system where multiple ATMs might exist.
+
+#### Why not just store a random token?
+
+**Naive approach:** On account creation, the bank generates `random_token = CSPRNG(32)`, stores it in its ledger, and sends it to the ATM to write into the card file. For future transactions, the ATM sends the token, and the bank compares it against its stored copy.
+
+This works but has a critical problem:
+
+1. **The token traverses the wire during creation** — the MITM sees `random_token` in the encrypted message. If the MITM later compromises the encryption (e.g., through a vulnerability), they have the card secret.
+2. **The bank must store the token** — the bank ledger now holds sensitive card data. If the bank process memory is dumped (core dump, crash report), all card secrets are exposed.
+3. **No mathematical binding** — the token is just random bytes. There is no way to verify, from the token alone, which account it belongs to. If an attacker swaps card files between accounts, the bank must do a lookup.
+
+#### Our approach: Deterministic derivation via HMAC
+
+```
+card_secret = HMAC-SHA256(K_card, account_name)
+```
+
+Step-by-step reasoning for why this is superior:
+
+**Step 1 — Uniqueness is mathematical, not random.**
+HMAC-SHA256 is a PRF (pseudorandom function). For two different account names `A ≠ B`, the outputs `HMAC(K, A) ≠ HMAC(K, B)` with overwhelming probability (collision resistance of SHA-256: $2^{128}$ security). No coordination or database lookup is needed — uniqueness is guaranteed by the math.
+
+**Step 2 — The bank never stores card secrets.**
+The bank only stores `K_card` (derived from the auth file). Given any account name, it can recompute `HMAC(K_card, account_name)` on the fly. This means:
+
+- Zero additional per-account storage for card validation
+- No card secrets in memory to leak
+- If the bank is restarted with the same auth file (hypothetically), all cards still work
+
+**Step 3 — The card secret never crosses the wire.**
+The ATM computes `card_secret` locally using `K_card` (derived from the auth file it already has). The bank computes the same `card_secret` independently. Neither side ever transmits it. What crosses the wire is only `card_proof = HMAC(card_secret, challenge)` — a one-time derivative that is useless after the session.
+
+**Step 4 — Account binding is intrinsic.**
+If Bob tries to use his card for Alice's account:
+
+- Bob's card contains `HMAC(K_card, "bob")`
+- He claims to be Alice and sends `card_proof = HMAC(HMAC(K_card, "bob"), challenge)`
+- Bank computes expected: `HMAC(HMAC(K_card, "alice"), challenge)`
+- These differ → rejected
+
+There is no way to repurpose one card for another account without knowing `K_card`, which requires the auth file.
+
+**Step 5 — Works in a distributed system with no coordination.**
+If there were multiple bank servers (not required by the spec, but for robustness):
+
+- Every server with the same auth file derives the same `K_card`
+- Every server computes the same `card_secret` for the same account
+- Card files work transparently across servers
+- **No replication of card databases, no distributed consensus needed**
+
+This is a major advantage over the random-token approach, which would require synchronising the token across replicas.
+
+#### Could we use an even simpler card file scheme?
+
+**Scheme A — Just store the account name in the card file:**
+The card file says `account=bob`. The ATM reads it, sends it to the bank. The bank checks it matches.
+
+_Problem:_ If the attacker obtains one card file, they learn the scheme and can forge cards for any account by just writing a file with a different name. There is no secret.
+
+**Scheme B — Store `SHA-256(account_name)` in the card file:**
+Better — the attacker must know the account name to create a card. But SHA-256 has no key; anyone can compute it. If the attacker knows the account name (which they might — it's sent in the request), they can forge the card.
+
+**Scheme C — Store `HMAC(K_card, account_name)` (our choice):**
+The keyed HMAC means the attacker needs `K_card` (derived from the auth file, which they don't have) to forge any card. Even knowing the account name and the format, they cannot compute the correct HMAC output. This is the simplest scheme that provides unforgeability.
+
+**Scheme D — Store a random token + server-side lookup (naive approach above):**
+More complex than Scheme C with **worse** properties (token on wire, server must store, no intrinsic binding). Scheme C dominates it.
+
+**Conclusion:** Scheme C (HMAC-based) is both the simplest secure scheme and the most elegant for distribution. Anything simpler either leaks information or is forgeable. Anything more complex adds no security.
+
+---
+
+### 12.4 Step-by-Step: Why Each Anti-MITM Decision Was Made
+
+Let's walk through the protocol and at each stage ask: _what attack does this step prevent?_ and _what's the simplest thing that works?_
+
+#### Step 1: Bank sends encrypted Challenge to ATM
+
+```
+Bank → ATM: E(K_enc, { type: "challenge", challenge: R_b })
+```
+
+**What it prevents:**
+
+- **Spoofing (fake bank):** Only the real bank has `K_enc`. A fake bank cannot produce a valid encrypted message. The ATM tries to decrypt — if it fails, `exit(63)`. MITM cannot impersonate the bank.
+
+**Why a challenge?**
+
+- `R_b` is 32 random bytes, fresh per connection. This becomes the seed for the card-proof challenge-response. Without it, the ATM's proof would be static (same every time), enabling replay.
+
+**Could this be simpler?**
+
+- We could skip the challenge and have the ATM prove itself with a timestamp-based proof instead: `HMAC(card_secret, current_time)`. But clocks can drift, and an attacker with a 30-second window could replay within that window. A server-generated random challenge has exactly zero replay window.
+
+#### Step 2: ATM sends encrypted Request with card_proof
+
+```
+ATM → Bank: E(K_enc, { type: "request", operation: "withdraw",
+             account: "bob", amount: "5000",
+             card_proof: HMAC(card_secret, R_b) })
+```
+
+**What it prevents:**
+
+- **Eavesdropping:** Encrypted — MITM cannot read the transaction details
+- **Forgery:** MITM cannot create a valid encrypted frame without `K_enc`
+- **Account spoofing:** `card_proof` is bound to both the card secret (which the attacker doesn't have) and the fresh challenge `R_b` (which changes every session)
+- **Cross-account attack:** Bob's `card_secret ≠` Alice's `card_secret`, so Bob's proof will fail for Alice's account
+
+**Could this be simpler?**
+
+- If we didn't have the card file requirement, we could omit `card_proof` entirely and rely only on the auth file for authentication. But the spec requires that "only a customer with a correct card file" can access their account. The HMAC-based challenge-response is the minimal way to prove card possession without sending the card secret.
+
+#### Step 3: Bank validates, applies transaction, responds
+
+```
+Bank → ATM: E(K_enc, { status: "success", account: "bob", withdraw: 50.00 })
+```
+
+**What it prevents:**
+
+- **Response forgery:** MITM cannot craft a fake "success" response to trick the ATM into thinking the transaction succeeded (or a fake "fail" to make the ATM show an error when it shouldn't)
+- **Balance leakage:** The response is encrypted, so the MITM cannot learn the resulting balance
+
+**Could this be simpler?**
+
+- We could send an unencrypted success/fail flag. But then the MITM learns whether the transaction succeeded, which leaks information (e.g., repeated withdrawals until failure reveals the balance). Encrypting the response is necessary.
+
+#### Step 4: Sequence numbers on every message
+
+**What they prevent:**
+
+- **Replay:** MITM records message #1 from a previous session. In a new session, sequence numbers start at 0 again, but the challenge `R_b` is different, so the replayed `card_proof` is invalid. Even within a session, replaying message #1 when the bank expects message #2 is rejected.
+- **Reordering:** If the protocol had 4 messages and the MITM swapped messages 2 and 3, the sequence check catches it immediately.
+
+**Could this be simpler?**
+
+- For a protocol with only 3 messages (challenge, request, response), reordering is barely possible — there's only one message per direction after the challenge. The sequence number is almost overkill here. But it costs 8 bytes per message and is trivial to implement, so it's cheap insurance for protocol extensions.
+
+#### Step 5: Timestamps
+
+**What they prevent:**
+
+- **Cross-session replay with stolen sequence state:** Even if an attacker somehow reset the sequence counter, a message from 10 minutes ago would have an expired timestamp.
+- **Stale connection attacks:** A MITM holds a connection open for hours, then replays it. The timestamp catches it.
+
+**Could this be simpler?**
+
+- Honestly, with fresh random challenges per session and sequence numbers, timestamps are the most expendable. They add a ±30s tolerance window which requires roughly synchronized clocks. In this system (ATM and bank on the same machine or LAN), clocks are synchronized, so the cost is low. But **if we had to simplify, timestamps would be the first thing to drop.**
+
+---
+
+### 12.5 Defending Against DoS and DDoS — Practical Measures
+
+The spec says: _"bank will continue running no matter what data its connected clients might send."_ Here is how we handle resource exhaustion:
+
+#### Attack: Connection Flooding
+
+A MITM opens thousands of TCP connections to the bank.
+
+**Defence — 10-second absolute timeout per connection:**
+Every connection has a 10-second hard deadline. After 10 seconds, the bank closes it and prints `protocol_error`. This bounds the maximum resource consumption:
+
+- At any given moment, the bank can have at most `N` open connections, each holding one socket and a small buffer
+- After 10 seconds they are force-closed, so the steady-state is bounded
+
+**Why not rate limiting?**
+The spec doesn't mention it, and the attacker operates at the network level — IP-based rate limiting is irrelevant when the MITM controls the network. The 10-second timeout is the primary defence.
+
+#### Attack: Malformed Data Flood
+
+MITM sends garbage bytes to every connection.
+
+**Defence — Fail-fast on decryption:**
+The first thing the bank does after receiving data is decrypt + verify the GCM tag. Random garbage:
+
+1. Will not have a valid 4-byte length prefix (likely a ridiculous length → reject immediately)
+2. If the length is plausible, the GCM tag will not verify → `protocol_error`, close, move on
+3. The bank **never** parses untrusted plaintext. It only processes data after successful authenticated decryption.
+
+This means garbage processing costs: one `read()`, one length check, at most one AES-GCM decrypt attempt (~microseconds), then close. The bank is back to accepting new connections immediately.
+
+#### Attack: Slowloris (Slow Data Send)
+
+MITM opens a connection and sends one byte per second to keep it alive.
+
+**Defence — 10-second total timeout, not per-read:**
+The timeout starts when the connection is accepted, not when data starts arriving. After 10 seconds total, the connection is killed regardless of how much data has been received. Slowloris is neutralised.
+
+#### Attack: Valid-Looking but Semantically Invalid Requests
+
+MITM cannot create valid encrypted messages (no auth file), so this attack is only possible from a compromised ATM.
+
+**Defence — Server-side validation of every field:**
+Even after successful decryption, the bank validates:
+
+- Account name format and existence
+- Amount format and range
+- Card proof correctness
+- Operation legality (e.g., sufficient balance)
+
+Any failure → send encrypted failure response, close connection. The bank does not crash.
+
+#### Attack: Memory Exhaustion via Huge Messages
+
+MITM sends a 4-byte length prefix indicating a 4GB message.
+
+**Defence — Maximum message size cap:**
+The bank reads the 4-byte length prefix first. If it exceeds a reasonable maximum (e.g., 8 KB — no valid message should be larger), the bank immediately closes the connection. It never allocates the buffer.
+
+---
+
+### 12.6 Summary: Minimum Viable Security vs. Our Design
+
+| Component      | Minimum that works                    | Our design                           | Delta                                    |
+| -------------- | ------------------------------------- | ------------------------------------ | ---------------------------------------- |
+| Encryption     | AES-256-CBC + HMAC (Encrypt-then-MAC) | AES-256-GCM (AEAD)                   | Simpler API, same security               |
+| Message auth   | HMAC-SHA256 over plaintext            | GCM tag + outer HMAC                 | Outer HMAC is optional safety net        |
+| Key derivation | Use K_master directly for everything  | HKDF → K_enc, K_mac, K_card          | Prevents related-key attacks; essential  |
+| Card file      | HMAC(K_card, account)                 | Same                                 | Already minimal                          |
+| Card proof     | Send card_secret directly             | HMAC(card_secret, challenge)         | Avoids putting secret on wire; essential |
+| Anti-replay    | Fresh random challenge per session    | Challenge + seq numbers + timestamps | Seq# and timestamps are defence-in-depth |
+| Anti-DoS       | 10-second timeout + max message size  | Same + message-size cap              | Already minimal                          |
+
+The bold conclusion: **the design uses exactly one step above the proven minimum at each layer.** The outer HMAC and timestamps could be dropped with no loss of provable security. Everything else is necessary.
+
+---
+
+## 13. Project Layout - Go
 
 ```
 secure-atm/
@@ -737,7 +1043,7 @@ clean:
 
 ---
 
-## 13. Project Layout - C++
+## 14. Project Layout - C++
 
 ```
 secure-atm/
@@ -865,7 +1171,7 @@ clean:
 
 ---
 
-## 14. Crypto Library Discussion
+## 15. Crypto Library Discussion
 
 ### Go: Standard Library + `x/crypto`
 
@@ -913,7 +1219,7 @@ clean:
 
 ---
 
-## 15. JSON Output Formatting
+## 16. JSON Output Formatting
 
 All JSON must be printed on a single line followed by `\n`, with explicit `fflush(stdout)` / `os.Stdout.Sync()`.
 
@@ -943,7 +1249,7 @@ The JSON number format follows standard JSON: no trailing zeros after decimal po
 
 ---
 
-## 16. Error Handling Summary
+## 17. Error Handling Summary
 
 | Situation                           | ATM Behavior                          | Bank Behavior                                          |
 | ----------------------------------- | ------------------------------------- | ------------------------------------------------------ |
