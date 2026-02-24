@@ -14,11 +14,10 @@
 10. [Program Flow - ATM Client](#10-program-flow--atm-client)
 11. [Threat Model & Attack Mitigations](#11-threat-model--attack-mitigations)
 12. [Design Rationale — Why These Choices, What Could Be Simpler](#12-design-rationale--why-these-choices-what-could-be-simpler)
-13. [Project Layout - Go](#13-project-layout--go)
-14. [Project Layout - C++](#14-project-layout--c)
-15. [Crypto Library Discussion](#15-crypto-library-discussion)
-16. [JSON Output Formatting](#16-json-output-formatting)
-17. [Error Handling Summary](#17-error-handling-summary)
+13. [Project Layout & Build System (C++ / CMake)](#13-project-layout--build-system-c--cmake)
+14. [C++ Crypto Libraries & Dependencies](#14-c-crypto-libraries--dependencies)
+15. [JSON Output Formatting](#15-json-output-formatting)
+16. [Error Handling Summary](#16-error-handling-summary)
 
 ---
 
@@ -636,7 +635,7 @@ Per the spec, the attacker:
 | **Card Forgery**                | Create a fake card file                         | Requires K_card (derived from auth file); attacker without auth file cannot compute valid card_secret                                                                                     |
 | **Balance Manipulation**        | Inflate balance or withdraw more than available | All balance state is server-side only; ATM is stateless; Bank enforces `balance >= withdrawal_amount`                                                                                     |
 | **Denial of Service**           | Flood bank with connections                     | Bank handles each connection independently; invalid data triggers `protocol_error` but does NOT crash the server; 10-second timeout prevents hanging connections from resource exhaustion |
-| **Timing Attack**               | Deduce information from response timing         | Use constant-time comparison for HMAC verification (`crypto/subtle.ConstantTimeCompare` in Go, `CRYPTO_memcmp` in OpenSSL)                                                                |
+| **Timing Attack**               | Deduce information from response timing         | Use constant-time comparison for HMAC verification (`CRYPTO_memcmp()` from OpenSSL)                                                                                                       |
 | **Overflow/Underflow**          | Malicious amounts cause arithmetic errors       | Store balances in cents as `uint64`; validate all amounts against `[0, 4294967295.99]` range; use checked arithmetic                                                                      |
 | **Auth File Reuse**             | Old auth file used with new bank instance       | Bank refuses to start if auth file exists; each run creates a fresh auth file with new K_master                                                                                           |
 | **Concurrent Transaction Race** | Two ATMs modify same account simultaneously     | Bank uses mutex/lock per account (or serial processing); atomic read-modify-write with mutex held                                                                                         |
@@ -958,270 +957,274 @@ The bold conclusion: **the design uses exactly one step above the proven minimum
 
 ---
 
-## 13. Project Layout - Go
+## 13. Project Layout & Build System (C++ / CMake)
+
+### 13.1 Directory Structure
 
 ```
 secure-atm/
 ├── build/
-│   ├── Makefile                  # Builds atm and bank binaries
-│   ├── go.mod                    # Go module definition
-│   ├── go.sum
-│   │
-│   ├── cmd/
-│   │   ├── atm/
-│   │   │   └── main.go           # ATM entry point, CLI parsing
-│   │   └── bank/
-│   │       └── main.go           # Bank entry point, CLI parsing
-│   │
-│   ├── internal/
-│   │   ├── crypto/
-│   │   │   ├── keys.go           # HKDF key derivation from K_master
-│   │   │   ├── aes_gcm.go        # AES-256-GCM encrypt / decrypt
-│   │   │   ├── hmac.go           # HMAC-SHA256 (card proof, outer MAC)
-│   │   │   └── random.go         # CSPRNG wrappers (nonces, challenges)
-│   │   │
-│   │   ├── protocol/
-│   │   │   ├── message.go        # Message types, serialization (JSON)
-│   │   │   ├── framing.go        # Length-prefixed framing (read/write)
-│   │   │   ├── session.go        # Encrypted session: send/recv with seq#
-│   │   │   └── timeout.go        # 10-second deadline management
-│   │   │
-│   │   ├── validator/
-│   │   │   ├── account.go        # Account name validation
-│   │   │   ├── amount.go         # Currency amount parsing & validation
-│   │   │   ├── filename.go       # File name validation
-│   │   │   ├── network.go        # IPv4 address & port validation
-│   │   │   └── args.go           # POSIX CLI argument parsing
-│   │   │
-│   │   ├── bank/
-│   │   │   ├── server.go         # TCP listener, accept loop, SIGTERM
-│   │   │   ├── handler.go        # Per-connection handler (protocol engine)
-│   │   │   ├── ledger.go         # In-memory account map with mutex
-│   │   │   └── authfile.go       # Auth file generation
-│   │   │
-│   │   ├── atm/
-│   │   │   ├── client.go         # TCP connect, protocol execution
-│   │   │   ├── cardfile.go       # Card file read/write
-│   │   │   └── authfile.go       # Auth file reading & validation
-│   │   │
-│   │   └── json/
-│   │       └── output.go         # JSON formatting with full precision
-│   │
-│   └── pkg/
-│       └── exitcodes/
-│           └── codes.go          # Exit code constants (0, 63, 255)
-```
-
-### Makefile (Go)
-
-```makefile
-.PHONY: all clean
-
-all: atm bank
-
-atm:
-	go build -o atm ./cmd/atm
-
-bank:
-	go build -o bank ./cmd/bank
-
-clean:
-	rm -f atm bank
-```
-
-### Go Crypto Libraries
-
-| Purpose               | Package                                  |
-| --------------------- | ---------------------------------------- |
-| AES-256-GCM           | `crypto/aes` + `crypto/cipher` (stdlib)  |
-| HMAC-SHA256           | `crypto/hmac` + `crypto/sha256` (stdlib) |
-| HKDF                  | `golang.org/x/crypto/hkdf`               |
-| CSPRNG                | `crypto/rand` (stdlib)                   |
-| Constant-time compare | `crypto/subtle` (stdlib)                 |
-
-> **Note**: `golang.org/x/crypto/hkdf` is the only external dependency. Alternatively, HKDF can be implemented manually (it's ~30 lines using HMAC-SHA256).
-
----
-
-## 14. Project Layout - C++
-
-```
-secure-atm/
-├── build/
-│   ├── Makefile                  # Builds atm and bank binaries
+│   ├── CMakeLists.txt                # Top-level CMake build (produces atm & bank)
+│   ├── Makefile                      # Wrapper: just calls cmake --build
 │   │
 │   ├── include/
 │   │   ├── crypto/
-│   │   │   ├── keys.hpp          # HKDF key derivation
-│   │   │   ├── aes_gcm.hpp       # AES-256-GCM encrypt / decrypt
-│   │   │   ├── hmac.hpp          # HMAC-SHA256
-│   │   │   └── random.hpp        # CSPRNG wrappers
+│   │   │   ├── keys.hpp              # HKDF key derivation from K_master
+│   │   │   ├── aes_gcm.hpp           # AES-256-GCM encrypt / decrypt
+│   │   │   ├── hmac.hpp              # HMAC-SHA256 (card proof, outer MAC)
+│   │   │   └── random.hpp            # CSPRNG wrappers (nonce, challenge gen)
 │   │   │
 │   │   ├── protocol/
-│   │   │   ├── message.hpp       # Message types, JSON serialization
-│   │   │   ├── framing.hpp       # Length-prefixed framing
-│   │   │   ├── session.hpp       # Encrypted session management
-│   │   │   └── timeout.hpp       # Socket timeout management
+│   │   │   ├── message.hpp           # Message types & JSON serialization
+│   │   │   ├── framing.hpp           # Length-prefixed framing (read/write)
+│   │   │   ├── session.hpp           # Encrypted session: send/recv with seq#
+│   │   │   └── timeout.hpp           # 10-second deadline management
 │   │   │
 │   │   ├── validator/
-│   │   │   ├── account.hpp       # Account name validation
-│   │   │   ├── amount.hpp        # Currency amount parsing
-│   │   │   ├── filename.hpp      # File name validation
-│   │   │   ├── network.hpp       # IPv4 & port validation
-│   │   │   └── args.hpp          # POSIX CLI argument parser
+│   │   │   ├── account.hpp           # Account name validation
+│   │   │   ├── amount.hpp            # Currency amount parsing & validation
+│   │   │   ├── filename.hpp          # File name validation
+│   │   │   ├── network.hpp           # IPv4 address & port validation
+│   │   │   └── args.hpp              # POSIX CLI argument parser (getopt)
 │   │   │
 │   │   ├── bank/
-│   │   │   ├── server.hpp        # TCP server
-│   │   │   ├── handler.hpp       # Connection handler
-│   │   │   ├── ledger.hpp        # In-memory account store
-│   │   │   └── authfile.hpp      # Auth file generation
+│   │   │   ├── server.hpp            # TCP server (bind/listen/accept)
+│   │   │   ├── handler.hpp           # Per-connection handler (protocol engine)
+│   │   │   ├── ledger.hpp            # In-memory account store (std::mutex)
+│   │   │   └── authfile.hpp          # Auth file generation
 │   │   │
 │   │   ├── atm/
-│   │   │   ├── client.hpp        # TCP client
-│   │   │   ├── cardfile.hpp      # Card file I/O
-│   │   │   └── authfile.hpp      # Auth file reading
+│   │   │   ├── client.hpp            # TCP client (connect, protocol exec)
+│   │   │   ├── cardfile.hpp          # Card file read/write
+│   │   │   └── authfile.hpp          # Auth file reading & validation
 │   │   │
 │   │   └── common/
-│   │       ├── json.hpp          # JSON output (or use nlohmann/json)
-│   │       └── exitcodes.hpp     # Exit code constants
+│   │       ├── exitcodes.hpp         # Exit code constants (0, 63, 255)
+│   │       └── types.hpp             # Shared typedefs (e.g., Cents = uint64_t)
 │   │
 │   ├── src/
 │   │   ├── crypto/
-│   │   │   ├── keys.cpp
-│   │   │   ├── aes_gcm.cpp
-│   │   │   ├── hmac.cpp
-│   │   │   └── random.cpp
+│   │   │   ├── keys.cpp              # HKDF implementation via OpenSSL EVP
+│   │   │   ├── aes_gcm.cpp           # AES-256-GCM using EVP_EncryptInit_ex
+│   │   │   ├── hmac.cpp              # HMAC-SHA256 using EVP_MAC (OpenSSL 3.x)
+│   │   │   └── random.cpp            # RAND_bytes() wrappers
 │   │   │
 │   │   ├── protocol/
-│   │   │   ├── message.cpp
-│   │   │   ├── framing.cpp
-│   │   │   ├── session.cpp
-│   │   │   └── timeout.cpp
+│   │   │   ├── message.cpp           # JSON serialization (nlohmann/json)
+│   │   │   ├── framing.cpp           # 4-byte length-prefix read/write
+│   │   │   ├── session.cpp           # Encrypt-then-send / recv-then-decrypt
+│   │   │   └── timeout.cpp           # setsockopt SO_RCVTIMEO / SO_SNDTIMEO
 │   │   │
 │   │   ├── validator/
-│   │   │   ├── account.cpp
-│   │   │   ├── amount.cpp
-│   │   │   ├── filename.cpp
-│   │   │   ├── network.cpp
-│   │   │   └── args.cpp
+│   │   │   ├── account.cpp           # Regex: [_\-\.0-9a-z]{1,122}
+│   │   │   ├── amount.cpp            # Parse (0|[1-9][0-9]*)\.[0-9]{2}
+│   │   │   ├── filename.cpp          # Regex: [_\-\.0-9a-z]{1,127}, not . or ..
+│   │   │   ├── network.cpp           # Dotted-decimal IPv4 + port 1024-65535
+│   │   │   └── args.cpp              # getopt() based POSIX arg parser
 │   │   │
 │   │   ├── bank/
-│   │   │   ├── main.cpp          # Bank entry point
-│   │   │   ├── server.cpp
-│   │   │   ├── handler.cpp
-│   │   │   ├── ledger.cpp
-│   │   │   └── authfile.cpp
+│   │   │   ├── main.cpp              # Bank entry point & CLI
+│   │   │   ├── server.cpp            # TCP listener, accept loop, SIGTERM
+│   │   │   ├── handler.cpp           # Dispatch: create/deposit/withdraw/balance
+│   │   │   ├── ledger.cpp            # std::unordered_map + std::mutex
+│   │   │   └── authfile.cpp          # CSPRNG → write auth file
 │   │   │
 │   │   └── atm/
-│   │       ├── main.cpp          # ATM entry point
-│   │       ├── client.cpp
-│   │       ├── cardfile.cpp
-│   │       └── authfile.cpp
+│   │       ├── main.cpp              # ATM entry point & CLI
+│   │       ├── client.cpp            # Connect, challenge-response, transact
+│   │       ├── cardfile.cpp          # Create / read card file
+│   │       └── authfile.cpp          # Read & validate auth file
 │   │
 │   └── third_party/
 │       └── nlohmann/
-│           └── json.hpp          # Header-only JSON library (optional)
+│           └── json.hpp              # Header-only JSON library (vendored)
 ```
 
-### Makefile (C++)
+### 13.2 CMakeLists.txt
+
+```cmake
+cmake_minimum_required(VERSION 3.14)
+project(secure-atm LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+# Compiler flags
+add_compile_options(-Wall -Wextra -Wpedantic -O2)
+
+# Find OpenSSL (required)
+find_package(OpenSSL REQUIRED)
+
+# Find Threads (for std::mutex, std::thread)
+find_package(Threads REQUIRED)
+
+# Include paths
+include_directories(
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/third_party
+)
+
+# Shared library (common code compiled once, linked to both)
+set(COMMON_SOURCES
+    src/crypto/keys.cpp
+    src/crypto/aes_gcm.cpp
+    src/crypto/hmac.cpp
+    src/crypto/random.cpp
+    src/protocol/message.cpp
+    src/protocol/framing.cpp
+    src/protocol/session.cpp
+    src/protocol/timeout.cpp
+    src/validator/account.cpp
+    src/validator/amount.cpp
+    src/validator/filename.cpp
+    src/validator/network.cpp
+    src/validator/args.cpp
+)
+
+add_library(common STATIC ${COMMON_SOURCES})
+target_link_libraries(common
+    PUBLIC OpenSSL::SSL OpenSSL::Crypto Threads::Threads
+)
+
+# ATM executable 
+add_executable(atm
+    src/atm/main.cpp
+    src/atm/client.cpp
+    src/atm/cardfile.cpp
+    src/atm/authfile.cpp
+)
+target_link_libraries(atm PRIVATE common)
+
+# Bank executable 
+add_executable(bank
+    src/bank/main.cpp
+    src/bank/server.cpp
+    src/bank/handler.cpp
+    src/bank/ledger.cpp
+    src/bank/authfile.cpp
+)
+target_link_libraries(bank PRIVATE common)
+
+# Install both binaries into the build directory
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR})
+```
+
+### 13.3 Wrapper Makefile (for spec compliance)
+
+The spec requires running `make` in the `build/` directory. This thin wrapper invokes CMake:
 
 ```makefile
-CXX      := g++
-CXXFLAGS := -std=c++17 -Wall -Wextra -O2 -Iinclude
-LDFLAGS  := -lssl -lcrypto -lpthread
-
-ATM_SRC  := $(wildcard src/atm/*.cpp src/crypto/*.cpp src/protocol/*.cpp src/validator/*.cpp)
-BANK_SRC := $(wildcard src/bank/*.cpp src/crypto/*.cpp src/protocol/*.cpp src/validator/*.cpp)
-
-ATM_OBJ  := $(ATM_SRC:.cpp=.o)
-BANK_OBJ := $(BANK_SRC:.cpp=.o)
+# build/Makefile — invoked by the grader as: cd build && make
 
 .PHONY: all clean
 
-all: atm bank
-
-atm: $(ATM_OBJ)
-	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
-
-bank: $(BANK_OBJ)
-	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
-
-%.o: %.cpp
-	$(CXX) $(CXXFLAGS) -c -o $@ $<
+all:
+	@mkdir -p _build && cd _build && cmake .. -DCMAKE_BUILD_TYPE=Release && $(MAKE)
+	@cp _build/atm . 2>/dev/null || true
+	@cp _build/bank . 2>/dev/null || true
 
 clean:
-	rm -f atm bank $(ATM_OBJ) $(BANK_OBJ)
+	@rm -rf _build atm bank
 ```
 
-### C++ Crypto Libraries
+This ensures `make` produces `atm` and `bank` directly in `build/` as required, while CMake manages the actual compilation.
 
-| Purpose               | Library / API                                                                                      |
-| --------------------- | -------------------------------------------------------------------------------------------------- |
-| AES-256-GCM           | OpenSSL `EVP_aes_256_gcm()` via `EVP_EncryptInit_ex` / `EVP_DecryptInit_ex`                        |
-| HMAC-SHA256           | OpenSSL `HMAC()` with `EVP_sha256()`                                                               |
-| HKDF                  | OpenSSL 1.1.0+ `EVP_PKEY_derive` with `EVP_PKEY_HKDF` or manual HKDF (extract + expand using HMAC) |
-| CSPRNG                | OpenSSL `RAND_bytes()`                                                                             |
-| Constant-time compare | OpenSSL `CRYPTO_memcmp()`                                                                          |
-| JSON                  | `nlohmann/json` (header-only, no build dependency) or manual formatting                            |
-| Networking            | POSIX sockets (`<sys/socket.h>`, `<arpa/inet.h>`)                                                  |
-| Signal handling       | `<signal.h>` with `sigaction()` for SIGTERM                                                        |
-| Threading (optional)  | `<pthread.h>` or `std::thread` for concurrent connections                                          |
+### 13.4 Build Instructions
 
-> **OpenSSL** (`libssl`, `libcrypto`) is typically pre-installed on Linux systems and available via `apt install libssl-dev`. This keeps the build offline-compatible as required.
+```bash
+# From the repository root:
+cd build
+make          # invokes CMake under the hood
+./bank -s bank.auth &
+./atm -s bank.auth -a bob -n 1000.00
+```
 
----
+Alternatively, for development:
 
-## 15. Crypto Library Discussion
-
-### Go: Standard Library + `x/crypto`
-
-**Pros:**
-
-- `crypto/aes`, `crypto/cipher`, `crypto/hmac`, `crypto/sha256`, `crypto/rand`, `crypto/subtle` are all in Go's standard library
-- Only `golang.org/x/crypto/hkdf` is external (can be vendored for offline builds)
-- Memory-safe language eliminates buffer overflow vulnerabilities
-- Garbage collector simplifies secret cleanup (though you should zero secrets explicitly with a `defer`)
-- Static linking produces a single binary - easy deployment
-
-**Cons:**
-
-- No hardware-accelerated AES-GCM on all platforms (though Go does use AES-NI when available)
-- GC may leave secret residue in memory (mitigatable with explicit zeroing)
-
-### C++: OpenSSL
-
-**Pros:**
-
-- Battle-tested, FIPS-validated cryptographic implementations
-- Hardware acceleration (AES-NI) is automatic
-- Fine-grained memory control - can explicitly `memset`/`OPENSSL_cleanse` secrets
-- Widely available on target systems
-
-**Cons:**
-
-- Manual memory management increases risk of leaks and use-after-free
-- API is verbose and error-prone (EVP interface)
-- Must link against `libssl` and `libcrypto` (usually available on submission system)
-- Need careful error handling for every OpenSSL call
-
-### Recommendation
-
-| Criterion             | Go                      | C++                   |
-| --------------------- | ----------------------- | --------------------- |
-| Development speed     | ✅ Faster               | Slower                |
-| Memory safety         | ✅ GC + bounds checking | Manual (risk of CVEs) |
-| Crypto API ergonomics | ✅ Clean, idiomatic     | Verbose EVP API       |
-| Performance           | Good (AES-NI supported) | ✅ Slightly better    |
-| Binary deployment     | ✅ Static binary        | Need libssl on target |
-| Secret cleanup        | Explicit zero needed    | ✅ `OPENSSL_cleanse`  |
-
-**For this project, Go is recommended** due to faster development, memory safety, and minimal external dependencies.
+```bash
+cd build
+mkdir -p _build && cd _build
+cmake .. -DCMAKE_BUILD_TYPE=Debug    # Debug build with symbols
+make -j$(nproc)
+```
 
 ---
 
-## 16. JSON Output Formatting
+## 14. C++ Crypto Libraries & Dependencies
 
-All JSON must be printed on a single line followed by `\n`, with explicit `fflush(stdout)` / `os.Stdout.Sync()`.
+### 14.1 OpenSSL — Primary Crypto Provider
+
+All cryptographic operations use **OpenSSL** (`libssl` + `libcrypto`), which is pre-installed on virtually all Linux distributions and macOS (via Homebrew/system). On Ubuntu/Debian: `apt install libssl-dev`. CMake's `find_package(OpenSSL REQUIRED)` handles detection.
+
+| Purpose               | OpenSSL API                                                                         | Header               |
+| --------------------- | ----------------------------------------------------------------------------------- | -------------------- |
+| AES-256-GCM encrypt   | `EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), ..., key, iv)`                          | `<openssl/evp.h>`    |
+| AES-256-GCM decrypt   | `EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), ..., key, iv)` + `EVP_CTRL_GCM_SET_TAG` | `<openssl/evp.h>`    |
+| HMAC-SHA256           | `HMAC(EVP_sha256(), key, key_len, data, data_len, out, &out_len)`                   | `<openssl/hmac.h>`   |
+| HKDF (extract+expand) | `EVP_PKEY_CTX_new_id(EVP_PKEY_HKDF, ...)` + `EVP_PKEY_derive(...)` (OpenSSL 1.1.0+) | `<openssl/kdf.h>`    |
+| CSPRNG                | `RAND_bytes(buf, len)`                                                              | `<openssl/rand.h>`   |
+| Constant-time compare | `CRYPTO_memcmp(a, b, len)`                                                          | `<openssl/crypto.h>` |
+| Secret cleanup        | `OPENSSL_cleanse(buf, len)`                                                         | `<openssl/crypto.h>` |
+
+
+### 14.2 nlohmann/json — JSON Serialization
+
+We vendor the single header `nlohmann/json.hpp` (v3.x) into `third_party/nlohmann/`. It is header-only, so it requires no separate compilation or linking — just `#include <nlohmann/json.hpp>`.
+
+**Why not manual formatting?** JSON is simple enough to format by hand with `printf`, but `nlohmann/json` gives us:
+
+- Correct escaping of special characters in account names
+- Easy number formatting control
+- Parse/validation for protocol messages if needed
+- Zero runtime dependency (compiled into the binary)
+
+### 14.3 POSIX / System Libraries
+
+| Purpose               | API                                                             | Header                             |
+| --------------------- | --------------------------------------------------------------- | ---------------------------------- |
+| TCP sockets           | `socket()`, `bind()`, `listen()`, `accept()`, `connect()`       | `<sys/socket.h>`, `<netinet/in.h>` |
+| IP address conversion | `inet_pton()`                                                   | `<arpa/inet.h>`                    |
+| Socket timeouts       | `setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, ...)`                  | `<sys/socket.h>`                   |
+| Signal handling       | `sigaction(SIGTERM, ...)`                                       | `<signal.h>`                       |
+| File I/O              | `std::ifstream`, `std::ofstream` or `open()`/`read()`/`write()` | `<fstream>` or `<fcntl.h>`         |
+| CLI argument parsing  | `getopt()` (POSIX)                                              | `<unistd.h>`                       |
+| Threading / Mutex     | `std::thread`, `std::mutex`                                     | `<thread>`, `<mutex>`              |
+| Output flushing       | `std::cout << std::flush` or `fflush(stdout)`                   | `<iostream>` or `<cstdio>`         |
+
+All of the above are available on any POSIX-compliant system with a C++17 compiler.
+
+### 14.4 Secret Lifetime Management in C++
+
+C++ gives us **explicit control** over secret lifetime, which is critical for a security-sensitive application:
+
+```cpp
+// 1. Zero secrets immediately after use
+uint8_t key[32];
+// ... use key ...
+OPENSSL_cleanse(key, sizeof(key));   // guaranteed not optimised away
+
+// 2. RAII wrapper for automatic cleanup
+class SecureBuffer {
+    std::vector<uint8_t> data_;
+public:
+    ~SecureBuffer() { OPENSSL_cleanse(data_.data(), data_.size()); }
+    // ...
+};
+
+// 3. Constant-time comparison (prevents timing attacks)
+if (CRYPTO_memcmp(computed_mac, received_mac, 32) != 0) {
+    // MAC mismatch → protocol_error
+}
+```
+
+Unlike garbage-collected languages, C++ guarantees that `OPENSSL_cleanse` runs deterministically in the destructor — no secret data lingers in memory waiting for GC.
+
+---
+
+## 15. JSON Output Formatting
+
+All JSON must be printed on a single line followed by `\n`, with explicit `fflush(stdout)` (or `std::cout << std::flush`).
 
 ### Precision Rules
 
@@ -1245,11 +1248,11 @@ The JSON number format follows standard JSON: no trailing zeros after decimal po
 {"account":"55555","balance":43.63}
 ```
 
-> Note: In the spec examples, `10.00` appears with trailing zeros for `initial_balance`. Follow the exact format shown in the spec examples. Some JSON libraries output `10` instead of `10.00` - match the spec output format precisely. The safest approach is to format the number such that the JSON encoder outputs it as-is (e.g., use `float64` in Go with `json.Marshal`, which outputs `1000` for `1000.0` and `63.1` for `63.1`).
+> Note: In the spec examples, `10.00` appears with trailing zeros for `initial_balance`. Follow the exact format shown in the spec examples. With `nlohmann/json`, use `json::number_float_t` for amounts. For custom formatting, write a helper that converts cents to the correct JSON number representation (e.g., `100000` cents → `1000`, `6310` cents → `63.1`). Avoid `double` arithmetic for balance tracking — only use `double` at the JSON output stage.
 
 ---
 
-## 17. Error Handling Summary
+## 16. Error Handling Summary
 
 | Situation                           | ATM Behavior                          | Bank Behavior                                          |
 | ----------------------------------- | ------------------------------------- | ------------------------------------------------------ |
