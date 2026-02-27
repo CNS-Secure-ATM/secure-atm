@@ -43,9 +43,9 @@ Both share a **pre-shared auth file** (distributed out-of-band over a trusted ch
 │   bank generates bank.auth ──────copy────────► atm reads bank.auth        │
 └───────────────────────────────────────────────────────────────────────────┘
 
-    ┌──────────────────────┐          TCP / TLS-like           ┌───────────────────────┐
-    │       ATM Client     │    ◄══════════════════════════►   │     Bank Server       │
-    │                      │       (encrypted channel)         │                       │
+    ┌──────────────────────┐                TCP                ┌───────────────────────┐
+    │       ATM Client     │    ◄---------------------------►  │     Bank Server       │
+    │                      │        (encrypted channel)        │                       │
     │  ┌────────────────┐  │                                   │  ┌─────────────────┐  │
     │  │  CLI Parser    │  │                                   │  │  TCP Listener   │  │
     │  │  (POSIX args)  │  │                                   │  │  (per-client    │  │
@@ -137,13 +137,13 @@ Responsible for:
 ### 4.1 Key Hierarchy
 
 ```
-bank.auth (256 bits random)                    ← Master Secret (K_master)
+bank.auth (256 bits random)                    <- Master Secret (K_master)
      │
-     ├──► HKDF-SHA256(K_master, "enc")         → K_enc   (256-bit AES key)
+     ├──► HKDF-SHA256(K_master, "enc")         -> K_enc   (256-bit AES key)
      │
-     ├──► HKDF-SHA256(K_master, "mac")         → K_mac   (256-bit HMAC key)
+     ├──► HKDF-SHA256(K_master, "mac")         -> K_mac   (256-bit HMAC key)
      │
-     └──► HKDF-SHA256(K_master, "card")        → K_card  (256-bit card derivation key)
+     └──► HKDF-SHA256(K_master, "card")        -> K_card  (256-bit card derivation key)
 ```
 
 **Why HKDF?** A single high-entropy master secret is expanded into domain-separated keys, preventing related-key attacks. Each derived key has a distinct purpose.
@@ -374,6 +374,300 @@ Only relevant fields are present per message type.
      │                                           │
      │──── TCP Close ───────────────────────────►│
 ```
+
+### 7.5 Failure Handling — What Happens When Any Stage Fails
+
+Every stage of the protocol has a defined failure path. The guiding principles are:
+
+1. **Bank never crashes** — any invalid input results in `"protocol_error\n"` on stdout, connection close, and return to the accept loop.
+2. **ATM exits with an error code** — `exit(63)` for network/protocol failures, `exit(255)` for local validation failures or a Bank-reported `"fail"` status.
+3. **No partial state** — if a failure occurs mid-transaction, the Bank rolls back any tentative changes (or simply never commits them, since changes are applied atomically at the end).
+4. **No information leakage** — error messages are generic. The Bank does not tell the ATM _why_ a request failed (missing account vs. wrong card vs. insufficient funds). It just sends `status: "fail"` or closes the connection.
+
+---
+
+#### Stage 1: TCP Connection
+
+```
+    ATM                                         BANK
+     │                                           │
+     │──── TCP Connect (SYN) ──────────────────► │
+     │                                           │
+     ├─ Connection refused (bank not running)    │
+     │    → ATM: exit(63), no stdout             │
+     │                                           │
+     ├─ Connection timeout (network issue)       │
+     │    → ATM: exit(63), no stdout             │
+     │                                           │
+     ├─ Bank accept() fails (fd exhaustion)      │
+     │    → Bank: log nothing, continue loop     │
+     │    → ATM: exit(63), no stdout             │
+```
+
+| Failure                  | ATM Behaviour         | Bank Behaviour               |
+| ------------------------ | --------------------- | ---------------------------- |
+| Connection refused       | `exit(63)`, no stdout | N/A (not running or backlog) |
+| Connection timeout       | `exit(63)`, no stdout | N/A                          |
+| `accept()` error on Bank | `exit(63)`, no stdout | Continue accept loop         |
+
+---
+
+#### Stage 2: Bank Sends Challenge
+
+```
+    ATM                                         BANK
+     │                                           │
+     │   (connected)                             │  Generate R_b = CSPRNG(32)
+     │                                           │  Encrypt challenge message
+     │                                           │
+     │                                           ├─ Encrypt fails (OpenSSL error)
+     │                                           │    → Bank: "protocol_error\n"
+     │                                           │    → Bank: close connection
+     │                                           │
+     │◄─── Encrypted Challenge { R_b } ───────── │
+     │                                           │
+     ├─ Read timeout (10s) before recv           │
+     │    → ATM: exit(63), no stdout             │
+     │                                           │
+     ├─ Decrypt fails (wrong auth file)          │
+     │    → ATM: exit(63), no stdout             │
+     │                                           │
+     ├─ Invalid message structure (bad JSON)     │
+     │    → ATM: exit(63), no stdout             │
+```
+
+| Failure                         | ATM Behaviour         | Bank Behaviour                        |
+| ------------------------------- | --------------------- | ------------------------------------- |
+| Bank can't generate/encrypt     | `exit(63)`, no stdout | `"protocol_error\n"`, close, continue |
+| ATM recv timeout (10s)          | `exit(63)`, no stdout | Eventually times out too, close       |
+| ATM decrypt failure (wrong key) | `exit(63)`, no stdout | Unaware — waits for request           |
+| Malformed challenge JSON        | `exit(63)`, no stdout | Unaware — waits for request           |
+
+---
+
+#### Stage 3: ATM Sends Encrypted Request
+
+```
+    ATM                                         BANK
+     │                                           │
+     │  Construct request JSON                   │
+     │  Encrypt + HMAC                           │
+     │                                           │
+     │──── Encrypted Request ──────────────────► │
+     │                                           │
+     │                                           ├─ Read timeout (10s)
+     │                                           │    → Bank: "protocol_error\n"
+     │                                           │    → Bank: close, continue loop
+     │                                           │
+     │                                           ├─ Length prefix > MAX_MSG_SIZE
+     │                                           │    → Bank: "protocol_error\n"
+     │                                           │    → Bank: close, continue loop
+     │                                           │
+     │                                           ├─ GCM decrypt fails (bad key/tampered)
+     │                                           │    → Bank: "protocol_error\n"
+     │                                           │    → Bank: close, continue loop
+     │                                           │
+     │                                           ├─ Outer HMAC mismatch
+     │                                           │    → Bank: "protocol_error\n"
+     │                                           │    → Bank: close, continue loop
+     │                                           │
+     │                                           ├─ Sequence number != expected
+     │                                           │    → Bank: "protocol_error\n"
+     │                                           │    → Bank: close, continue loop
+     │                                           │
+     │                                           ├─ Timestamp outside ±30s window
+     │                                           │    → Bank: "protocol_error\n"
+     │                                           │    → Bank: close, continue loop
+     │                                           │
+     │                                           ├─ Malformed JSON (missing fields)
+     │                                           │    → Bank: "protocol_error\n"
+     │                                           │    → Bank: close, continue loop
+```
+
+| Failure                           | ATM Behaviour                        | Bank Behaviour                            |
+| --------------------------------- | ------------------------------------ | ----------------------------------------- |
+| ATM can't encrypt (OpenSSL error) | `exit(255)`, no stdout               | Times out after 10s, `"protocol_error\n"` |
+| ATM send fails (broken pipe)      | `exit(63)`, no stdout                | Times out after 10s, `"protocol_error\n"` |
+| Bank recv timeout                 | Waiting for response → times out too | `"protocol_error\n"`, close, continue     |
+| Length prefix too large           | N/A                                  | `"protocol_error\n"`, close, continue     |
+| GCM tag verification fails        | N/A                                  | `"protocol_error\n"`, close, continue     |
+| HMAC mismatch                     | N/A                                  | `"protocol_error\n"`, close, continue     |
+| Bad sequence number               | N/A                                  | `"protocol_error\n"`, close, continue     |
+| Expired timestamp                 | N/A                                  | `"protocol_error\n"`, close, continue     |
+| Malformed JSON after decryption   | N/A                                  | `"protocol_error\n"`, close, continue     |
+
+> **Key point:** Every failure at this stage results in the same Bank output: `"protocol_error\n"`. The Bank does not distinguish between an attacker and a buggy ATM. This prevents information leakage about _which_ check failed.
+
+---
+
+#### Stage 4: Bank Validates Business Logic
+
+After successful decryption and frame verification, the Bank validates the transaction semantics:
+
+```
+    ATM                                         BANK
+     │                                           │
+     │                                           │  Decryption + frame OK ✓
+     │                                           │
+     │                                           ├─ card_proof mismatch (wrong card / wrong account)
+     │                                           │    → Bank: "protocol_error\n"
+     │                                           │    → Bank: close, continue loop
+     │                                           │    → ATM: recv fails or gets no response → exit(63)
+     │                                           │
+     │                                           ├─ CREATE: account already exists
+     │                                           │    → Bank: sends encrypted { status: "fail" }
+     │                                           │    → Bank: "protocol_error\n", close
+     │                                           │    → ATM: receives "fail" → exit(255)
+     │                                           │
+     │                                           ├─ CREATE: initial balance < 10.00
+     │                                           │    → ATM rejects locally before sending (exit 255)
+     │                                           │    → Bank also validates: sends { status: "fail" }
+     │                                           │
+     │                                           ├─ DEPOSIT/WITHDRAW/BALANCE: account not found
+     │                                           │    → Bank: sends encrypted { status: "fail" }
+     │                                           │    → Bank: "protocol_error\n", close
+     │                                           │    → ATM: receives "fail" → exit(255)
+     │                                           │
+     │                                           ├─ WITHDRAW: insufficient funds (balance < amount)
+     │                                           │    → Bank: sends encrypted { status: "fail" }
+     │                                           │    → Bank: "protocol_error\n", close
+     │                                           │    → ATM: receives "fail" → exit(255)
+     │                                           │
+     │                                           ├─ DEPOSIT: amount <= 0 or invalid
+     │                                           │    → ATM rejects locally (exit 255)
+     │                                           │    → Bank also validates: sends { status: "fail" }
+     │                                           │
+     │                                           ├─ Amount overflow (balance + deposit > max)
+     │                                           │    → Bank: sends encrypted { status: "fail" }
+     │                                           │    → Bank: "protocol_error\n", close
+     │                                           │    → ATM: receives "fail" → exit(255)
+```
+
+| Failure                      | Bank stdout output   | Bank sends to ATM           | ATM exit code | ATM stdout |
+| ---------------------------- | -------------------- | --------------------------- | ------------- | ---------- |
+| Wrong card_proof             | `"protocol_error\n"` | Nothing (close immediately) | `63`          | None       |
+| Account already exists       | `"protocol_error\n"` | `{ status: "fail" }`        | `255`         | None       |
+| Account not found            | `"protocol_error\n"` | `{ status: "fail" }`        | `255`         | None       |
+| Insufficient funds           | `"protocol_error\n"` | `{ status: "fail" }`        | `255`         | None       |
+| Invalid amount (server-side) | `"protocol_error\n"` | `{ status: "fail" }`        | `255`         | None       |
+| Balance overflow             | `"protocol_error\n"` | `{ status: "fail" }`        | `255`         | None       |
+
+> **Atomicity guarantee:** The Bank never modifies the ledger until _all_ validations pass. The order is: (1) decrypt + verify frame → (2) verify card_proof → (3) check account exists → (4) check constraints (balance, amount) → (5) **only then** commit the change. If any step fails, the ledger is untouched.
+
+---
+
+#### Stage 5: Bank Sends Response
+
+```
+    ATM                                         BANK
+     │                                           │
+     │                                           │  Transaction committed ✓
+     │                                           │  Bank prints JSON to stdout ✓
+     │                                           │
+     │                                           ├─ Encrypt response fails (OpenSSL error)
+     │                                           │    → Bank: close connection (JSON already printed)
+     │                                           │    → ATM: recv timeout → exit(63)
+     │                                           │    → !! Bank state is committed but ATM doesn't know
+     │                                           │
+     │                                           ├─ Send fails (broken pipe / ATM disconnected)
+     │                                           │    → Bank: close connection (JSON already printed)
+     │                                           │    → ATM: exit(63)
+     │                                           │    → !! Same inconsistency risk (see note below)
+     │                                           │
+     │◄─── Encrypted Response ───────────────────│
+     │                                           │
+     ├─ Recv timeout (10s)                       │
+     │    → ATM: exit(63), no stdout             │
+     │    → Bank: already printed JSON, done     │
+     │                                           │
+     ├─ GCM decrypt fails (tampered response)    │
+     │    → ATM: exit(63), no stdout             │
+     │                                           │
+     ├─ HMAC mismatch                            │
+     │    → ATM: exit(63), no stdout             │
+     │                                           │
+     ├─ Bad sequence number                      │
+     │    → ATM: exit(63), no stdout             │
+     │                                           │
+     ├─ Expired timestamp                        │
+     │    → ATM: exit(63), no stdout             │
+     │                                           │
+     ├─ status == "fail"                         │
+     │    → ATM: exit(255), no stdout            │
+     │                                           │
+     ├─ Malformed response JSON                  │
+     │    → ATM: exit(63), no stdout             │
+```
+
+| Failure                        | ATM Behaviour          | Bank Behaviour                     |
+| ------------------------------ | ---------------------- | ---------------------------------- |
+| Bank can't encrypt response    | `exit(63)`, no stdout  | Already printed JSON; close        |
+| Send fails (broken pipe)       | `exit(63)`, no stdout  | Already printed JSON; close        |
+| ATM recv timeout               | `exit(63)`, no stdout  | Already printed JSON; done         |
+| ATM decrypt failure (tampered) | `exit(63)`, no stdout  | Already printed JSON; done         |
+| ATM HMAC mismatch              | `exit(63)`, no stdout  | Already printed JSON; done         |
+| Bad sequence / timestamp       | `exit(63)`, no stdout  | Already printed JSON; done         |
+| Response status = `"fail"`     | `exit(255)`, no stdout | Printed `"protocol_error\n"`; done |
+| Malformed response JSON        | `exit(63)`, no stdout  | Already printed JSON; done         |
+
+> **Edge case — Bank committed but ATM failed to receive:**
+> If the Bank successfully processes a deposit/withdrawal and prints its JSON, but the response never reaches the ATM (network failure, MITM drop), the Bank's ledger reflects the change while the ATM reports failure. This is a **fundamental limitation** of any non-two-phase-commit protocol. The spec's design accepts this: the Bank's ledger is the source of truth, and the ATM is stateless. A subsequent balance check (`-g`) will reveal the actual state.
+
+---
+
+#### Stage 6: ATM Post-Processing
+
+```
+    ATM
+     │
+     │  Response received and validated ✓
+     │
+     ├─ IF CREATE: write card file
+     │    ├─ Card file somehow appeared (race condition)
+     │    │    → ATM: exit(255), no stdout
+     │    │    → Bank: already committed account (account exists but no card file)
+     │    │    → !! Recover: re-run create → Bank returns "fail" (account exists)
+     │    │         Must manually resolve (spec doesn't cover this)
+     │    │
+     │    ├─ Disk full / write error
+     │    │    → ATM: exit(255), no stdout
+     │    │    → Bank: already committed account
+     │    │    → !! Same orphaned-account situation
+     │    │
+     │    └─ Write succeeds → print JSON, exit(0)
+     │
+     ├─ IF DEPOSIT/WITHDRAW/BALANCE:
+     │    → print JSON, flush stdout, exit(0)
+```
+
+| Failure                   | ATM exit | ATM stdout | Consequence                                     |
+| ------------------------- | -------- | ---------- | ----------------------------------------------- |
+| Card file write fails     | `255`    | None       | Orphaned account on Bank (no card to access it) |
+| Card file race (appeared) | `255`    | None       | Same orphaned account                           |
+| All OK                    | `0`      | JSON line  | Success                                         |
+
+---
+
+#### 7.5.1 Failure Handling Summary — Complete Decision Table
+
+| Stage           | Error Condition     | Bank stdout       | Bank → ATM  | ATM stdout | ATM exit |
+| --------------- | ------------------- | ----------------- | ----------- | ---------- | -------- |
+| 1 — TCP Connect | Connection refused  | —                 | —           | —          | `63`     |
+| 1 — TCP Connect | Connection timeout  | —                 | —           | —          | `63`     |
+| 2 — Challenge   | ATM recv timeout    | —                 | —           | —          | `63`     |
+| 2 — Challenge   | ATM decrypt failure | —                 | —           | —          | `63`     |
+| 3 — Request     | Bank recv timeout   | `protocol_error`  | —           | —          | `63`     |
+| 3 — Request     | GCM/HMAC failure    | `protocol_error`  | —           | —          | `63`     |
+| 3 — Request     | Bad seq/timestamp   | `protocol_error`  | —           | —          | `63`     |
+| 3 — Request     | Malformed JSON      | `protocol_error`  | —           | —          | `63`     |
+| 4 — Validation  | Wrong card_proof    | `protocol_error`  | Close       | —          | `63`     |
+| 4 — Validation  | Account conflict    | `protocol_error`  | `{fail}`    | —          | `255`    |
+| 4 — Validation  | Insufficient funds  | `protocol_error`  | `{fail}`    | —          | `255`    |
+| 5 — Response    | ATM recv timeout    | (already printed) | —           | —          | `63`     |
+| 5 — Response    | ATM decrypt failure | (already printed) | —           | —          | `63`     |
+| 5 — Response    | status = "fail"     | `protocol_error`  | `{fail}`    | —          | `255`    |
+| 6 — Post        | Card write failure  | (already printed) | —           | —          | `255`    |
+| ✓ — Success     | All OK              | JSON line         | `{success}` | JSON line  | `0`      |
 
 ---
 
@@ -1087,7 +1381,7 @@ target_link_libraries(common
     PUBLIC OpenSSL::SSL OpenSSL::Crypto Threads::Threads
 )
 
-# ATM executable 
+# ATM executable
 add_executable(atm
     src/atm/main.cpp
     src/atm/client.cpp
@@ -1096,7 +1390,7 @@ add_executable(atm
 )
 target_link_libraries(atm PRIVATE common)
 
-# Bank executable 
+# Bank executable
 add_executable(bank
     src/bank/main.cpp
     src/bank/server.cpp
@@ -1166,7 +1460,6 @@ All cryptographic operations use **OpenSSL** (`libssl` + `libcrypto`), which is 
 | CSPRNG                | `RAND_bytes(buf, len)`                                                              | `<openssl/rand.h>`   |
 | Constant-time compare | `CRYPTO_memcmp(a, b, len)`                                                          | `<openssl/crypto.h>` |
 | Secret cleanup        | `OPENSSL_cleanse(buf, len)`                                                         | `<openssl/crypto.h>` |
-
 
 ### 14.2 nlohmann/json — JSON Serialization
 
