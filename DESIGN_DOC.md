@@ -41,6 +41,38 @@ Wire Frame:
 
 The outer HMAC covers everything from SeqNo through Timestamp, providing a defence-in-depth authentication layer on top of GCM's built-in tag.
 
+### Initial Connection Protocol
+
+Before any encrypted messages flow, the bank must be running and the ATM must establish a TCP connection to it.
+
+```
+BANK (server)                                ATM (client)
+    |                                            |
+    |  1. Parse CLI flags (-p port, -s authfile) |  1. Parse CLI flags (-i ip, -p port,
+    |  2. Generate K_MASTER (256 bits CSPRNG)    |     -s authfile, -c cardfile, ...)
+    |  3. Write auth file                        |  2. Validate all inputs (account name,
+    |  4. Print "created\n" to stdout            |     amount format, file names, port range)
+    |  5. Derive K_ENC, K_MAC, K_CARD via HKDF   |  3. Read auth file -> derive K_ENC,
+    |  6. Create TCP socket                      |     K_MAC, K_CARD via HKDF
+    |  7. setsockopt(SO_REUSEADDR)               |  4. Read card file (if not -n mode)
+    |  8. bind(0.0.0.0, port)                    |
+    |  9. listen(backlog)                        |
+    |  10. Accept loop begins                    |
+    |     |                                      |
+    |     |<-------- TCP SYN --------------------|  5. connect(bank_ip, bank_port)
+    |     |--------- SYN-ACK ------------------> |
+    |     |<-------- ACK ----------------------- |
+    |     |                                      |
+    |     |  accept() returns new socket fd      |  Connection established
+    |     |  Set SO_RCVTIMEO = 10 seconds        |  Set SO_RCVTIMEO = 10 seconds
+    |     |                                      |
+    |     |  ... encrypted protocol begins ...   |
+```
+
+**Startup ordering matters:** The bank must be fully running (listening on its port and having printed `"created\n"`) before any ATM instance connects. If the ATM connects before the bank is ready, `connect()` fails and the ATM exits with code 63.
+
+**One connection per invocation:** Each ATM process opens exactly one TCP connection, performs one transaction (3 encrypted messages), and exits. The bank's accept loop handles connections sequentially - one at a time, with a 10-second timeout per connection.
+
 ### Transaction Flow (3 messages)
 
 ```
@@ -81,8 +113,8 @@ Specific failure points:
 - **TCP connect fails** -> ATM exits 63; bank is unaffected.
 - **Decryption/HMAC/sequence/timestamp check fails** (any message, either direction) -> receiving side treats it as protocol error. Bank prints `"protocol_error\n"` and closes. ATM exits 63.
 - **Card proof mismatch** -> Bank closes immediately (no response sent), prints `"protocol_error\n"`. ATM times out, exits 63.
-- **Business logic failure** (account exists, insufficient funds, etc.) -> Bank sends encrypted `{status: "fail"}`, prints `"protocol_error\n"`. ATM exits 255.
-- **Response lost in transit** (bank committed but ATM never received) -> Bank's ledger is the source of truth; ATM exits 63. A subsequent balance check reveals the real state. This is a fundamental limitation without two-phase commit, and the spec accepts it.
+- **Business logic failure** (account exists, insufficient funds, etc.) -> Bank sends encrypted `{status: "fail"}`, prints `"protocol_error\n"`. ATM exits `255`.
+- **Response lost in transit** (bank committed but ATM never received) -> Bank's ledger is the source of truth; ATM exits `63`. A subsequent balance check reveals the real state. This is a fundamental limitation without two-phase commit, and the spec accepts it.
 - **10-second timeout** applies to every connection. Prevents slowloris, hanging connections, and resource exhaustion.
 - **Message size cap** (~8 KB). Any length prefix exceeding this -> immediate close without allocating memory.
 
@@ -128,14 +160,55 @@ K_MASTER -- HKDF --> K_ENC   (encryption)
 
 This prevents related-key attacks - even though all keys come from the same source, they are cryptographically independent. If we used K_MASTER directly for both encryption and MAC, a theoretical weakness in one primitive could compromise the other. HKDF makes this impossible.
 
-### Card File Design
+### Card File - Creation and Authentication
 
-The card secret is `HMAC(K_CARD, ACCOUNT_NAME)` - deterministic, not random. This means:
+The card secret is `HMAC(K_CARD, ACCOUNT_NAME)` - deterministic, not random. The bank never stores card secrets; it recomputes them on the fly from `K_CARD` + account name.
 
-- **The bank never stores card secrets** - it recomputes on the fly from K_CARD + account name.
-- **The card secret never crosses the wire** - both sides derive it independently. Only `CARD_PROOF = HMAC(CARD_SECRET, CHALLENGE)` is transmitted, and it's a one-time value.
-- **Uniqueness is mathematical** - HMAC-SHA256 is a PRF; different account names yield different secrets with $`2^{128}`$ collision resistance.
-- **Account binding is intrinsic** - Bob's card provably cannot work for Alice's account without K_CARD.
+**Creation (`-n` mode):**
+
+```
+ATM                                         BANK
+ |                                           |
+ |  (no card file exists yet)                |
+ |---- Encrypted { create, "bob", 1000 } --> |
+ |                                           |  Verify account doesn't exist
+ |                                           |  Create account with initial balance
+ |<--- Encrypted { success, balance } ------ |
+ |                                           |
+ |  CARD_SECRET = HMAC(K_CARD, "bob")        |
+ |  Write CARD_SECRET to bob.card            |
+ |  (card file never sent to bank)           |
+```
+
+The card secret is computed entirely on the ATM side after a successful create response. It is never transmitted. If the card file already exists, the ATM exits 255 before connecting.
+
+**Authentication (`-d`, `-w`, `-g` modes) - Challenge-Response:**
+
+```
+ATM                                         BANK
+ |                                           |
+ |  Read CARD_SECRET from bob.card           |
+ |                                           |
+ |<--- Encrypted { CHALLENGE: R_B } -------- |  R_B = 32 random bytes (CSPRNG)
+ |                                           |
+ |  CARD_PROOF = HMAC(CARD_SECRET, R_B)      |
+ |                                           |
+ |---- Encrypted { op, "bob", amount, -----> |
+ |      CARD_PROOF }                         |
+ |                                           |  Bank independently computes:
+ |                                           |    EXPECTED_SECRET = HMAC(K_CARD, "bob")
+ |                                           |    EXPECTED_PROOF  = HMAC(EXPECTED_SECRET, R_B)
+ |                                           |  Verify: CARD_PROOF == EXPECTED_PROOF
+ |                                           |    (constant-time via CRYPTO_memcmp)
+ |                                           |  Match -> proceed; mismatch -> protocol_error
+```
+
+**Why this works:**
+
+- **The card secret never crosses the wire** - only `CARD_PROOF = HMAC(CARD_SECRET, CHALLENGE)` is transmitted, and it's a one-time value bound to a fresh random challenge.
+- **Uniqueness is mathematical** - HMAC-SHA256 is a PRF; different account names yield different secrets with $2^{128}$ collision resistance.
+- **Account binding is intrinsic** - Bob's card yields `HMAC(K_CARD, "bob")` != `HMAC(K_CARD, "alice")`, so Bob's card provably cannot authenticate for Alice's account.
+- **Replay is impossible** - each session uses a fresh 32-byte `R_B`, so a captured `CARD_PROOF` from a previous session is useless.
 
 ---
 
@@ -149,10 +222,9 @@ The card secret is `HMAC(K_CARD, ACCOUNT_NAME)` - deterministic, not random. Thi
 
 **Challenge-response over sending the card secret directly:** Sending the secret would expose it in the encrypted payload - a problem if the encryption is ever compromised. The CHALLENGE-response ensures the card secret never leaves the local machine.
 
-**Cents as `uint64` internally:** Avoids all floating-point precision issues. We only convert to `double` at JSON output time. The uint64 range (up to $`\approx 1.8 \times 10^{19}`$) is more than sufficient.
+**Cents as `uint64` internally:** Avoids all floating-point precision issues. We only convert to `double` at JSON output time. The uint64 range (up to ~1.8 x 10^19) is more than sufficient.
 
 **C++ with OpenSSL:** OpenSSL is pre-installed on the target system, requires no internet to build, and provides battle-tested implementations (AES-NI acceleration, FIPS validation). We use the EVP API throughout: `EVP_aes_256_gcm`, `HMAC()`, `EVP_PKEY_HKDF`, `RAND_bytes()`, `CRYPTO_memcmp()`, and `OPENSSL_cleanse()`.
-
 
 ---
 
