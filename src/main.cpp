@@ -3,6 +3,9 @@
 #include <iostream>
 #include <fstream>
 
+using json = nlohmann::json;
+using namespace std;
+
 int main(int argc, char* argv[]) {
     argparse::ArgumentParser program("json_parser");
 
@@ -12,30 +15,30 @@ int main(int argc, char* argv[]) {
 
     try {
         program.parse_args(argc, argv);
-    } catch (const std::runtime_error& err) {
-        std::cerr << err.what() << std::endl;
-        std::cerr << program;
+    } catch (const runtime_error& err) {
+        cerr << err.what() << endl;
+        cerr << program;
         return 1;
     }
 
-    std::string file_path = program.get<std::string>("--file");
+    string file_path = program.get<string>("--file");
 
     try {
         // Read the JSON file
-        std::ifstream json_file(file_path);
-        if (!json_file.is_open()) {
-            throw std::runtime_error("Could not open file: " + file_path);
+        ifstream f(file_path);
+        if (!f.is_open()) {
+            throw runtime_error("Could not open file: " + file_path);
         }
 
-        nlohmann::json json_data;
-        json_file >> json_data;
+        json data;
+        f >> data;
 
         // Print the parsed JSON data
-        std::cout << "Parsed JSON data:" << std::endl;
-        std::cout << json_data.dump(4) << std::endl; // Pretty print with indentation
+        cout << "Parsed JSON data:" << endl;
+        cout << data.dump(4) << endl; // Pretty print with indentation
 
-    } catch (const std::exception& e) {
-        std::cerr << "Error: " << e.what() << std::endl;
+    } catch (const exception& e) {
+        cerr << "Error: " << e.what() << endl;
         return 1;
     }
 
