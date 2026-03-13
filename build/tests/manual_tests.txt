@@ -1,0 +1,183 @@
+================================================================================
+                    SECURE ATM - MANUAL TEST SCENARIOS
+================================================================================
+
+Before running any ATM commands, start the bank server in a terminal:
+
+    ./bank -p 4000 -s test.auth
+
+Then run ATM commands in another terminal. All commands below assume port 4000.
+
+--------------------------------------------------------------------------------
+BASIC OPERATIONS
+--------------------------------------------------------------------------------
+
+# Create a new account with initial balance
+./atm -p 4000 -s test.auth -a alice -n 1000.00
+
+# Check balance
+./atm -p 4000 -s test.auth -a alice -g
+
+# Deposit money
+./atm -p 4000 -s test.auth -a alice -d 500.00
+
+# Withdraw money
+./atm -p 4000 -s test.auth -a alice -w 200.00
+
+# Check balance again
+./atm -p 4000 -s test.auth -a alice -g
+
+--------------------------------------------------------------------------------
+MULTIPLE ACCOUNTS
+--------------------------------------------------------------------------------
+
+# Create several accounts
+./atm -p 4000 -s test.auth -a bob -n 500.00
+./atm -p 4000 -s test.auth -a charlie -n 100.00
+./atm -p 4000 -s test.auth -a user_123 -n 2500.00
+./atm -p 4000 -s test.auth -a test.account -n 50.00
+
+# Check each balance
+./atm -p 4000 -s test.auth -a bob -g
+./atm -p 4000 -s test.auth -a charlie -g
+
+--------------------------------------------------------------------------------
+CUSTOM CARD FILE
+--------------------------------------------------------------------------------
+
+# Create account with custom card file name
+./atm -p 4000 -s test.auth -a dave -c mycard.card -n 1000.00
+
+# Use custom card file for operations
+./atm -p 4000 -s test.auth -a dave -c mycard.card -d 100.00
+./atm -p 4000 -s test.auth -a dave -c mycard.card -g
+
+--------------------------------------------------------------------------------
+ERROR CASES (Expected to fail)
+--------------------------------------------------------------------------------
+
+# Duplicate account creation (exit 255)
+./atm -p 4000 -s test.auth -a alice -n 100.00
+
+# Non-existent account (exit 255)
+./atm -p 4000 -s test.auth -a nonexistent -g
+
+# Insufficient funds (exit 255)
+./atm -p 4000 -s test.auth -a charlie -w 999.00
+
+# Wrong card file (exit 63 - protocol error)
+./atm -p 4000 -s test.auth -a bob -c alice.card -g
+
+# Missing card file (exit 63)
+./atm -p 4000 -s test.auth -a alice -c missing.card -g
+
+--------------------------------------------------------------------------------
+INPUT VALIDATION (All should exit 255)
+--------------------------------------------------------------------------------
+
+# Invalid account names
+./atm -p 4000 -s test.auth -a Alice -n 100.00          # uppercase
+./atm -p 4000 -s test.auth -a "alice bob" -n 100.00    # space
+./atm -p 4000 -s test.auth -a alice@bank -n 100.00     # special char
+./atm -p 4000 -s test.auth -a "" -n 100.00             # empty
+
+# Invalid amounts
+./atm -p 4000 -s test.auth -a alice -d 100             # no decimals
+./atm -p 4000 -s test.auth -a alice -d 100.0           # one decimal
+./atm -p 4000 -s test.auth -a alice -d 100.000         # three decimals
+./atm -p 4000 -s test.auth -a alice -d 01.00           # leading zero
+./atm -p 4000 -s test.auth -a alice -d -50.00          # negative
+./atm -p 4000 -s test.auth -a alice -d 0.00            # zero amount
+./atm -p 4000 -s test.auth -a alice -w 0.00            # zero withdraw
+
+# Invalid port
+./atm -p 80 -s test.auth -a alice -g                   # privileged port
+./atm -p 99999 -s test.auth -a alice -g                # out of range
+
+# Invalid IP
+./atm -p 4000 -i localhost -s test.auth -a alice -g   # hostname not IP
+./atm -p 4000 -i 256.0.0.1 -s test.auth -a alice -g   # invalid octet
+
+--------------------------------------------------------------------------------
+EDGE CASES
+--------------------------------------------------------------------------------
+
+# Minimum valid amount
+./atm -p 4000 -s test.auth -a alice -d 0.01
+
+# Minimum balance for new account
+./atm -p 4000 -s test.auth -a minimum -n 10.00
+
+# Large deposit
+./atm -p 4000 -s test.auth -a alice -d 1000000.00
+
+# Withdraw exact balance (should succeed)
+./atm -p 4000 -s test.auth -a charlie -g              # check first
+./atm -p 4000 -s test.auth -a charlie -w 100.00       # withdraw all
+
+# Account names with special valid chars
+./atm -p 4000 -s test.auth -a a_b-c.d -n 100.00
+./atm -p 4000 -s test.auth -a 123 -n 100.00
+./atm -p 4000 -s test.auth -a _underscore -n 100.00
+
+--------------------------------------------------------------------------------
+NETWORK SCENARIOS
+--------------------------------------------------------------------------------
+
+# Connect to different IP (if bank running elsewhere)
+./atm -p 4000 -i 192.168.1.100 -s test.auth -a alice -g
+
+# Connection refused (no bank running)
+./atm -p 9999 -s test.auth -a alice -g
+
+# Wrong auth file (exit 63)
+./atm -p 4000 -s wrong.auth -a alice -g
+
+--------------------------------------------------------------------------------
+BANK SERVER OPTIONS
+--------------------------------------------------------------------------------
+
+# Start bank with defaults (port 3000, bank.auth)
+./bank
+
+# Start bank with custom port
+./bank -p 5000
+
+# Start bank with custom auth file
+./bank -s custom.auth
+
+# Start bank with both options
+./bank -p 4000 -s test.auth
+
+--------------------------------------------------------------------------------
+STRESS TEST (run in loop)
+--------------------------------------------------------------------------------
+
+# Create account for stress testing
+./atm -p 4000 -s test.auth -a stresstest -n 100000.00
+
+# Rapid deposits
+for i in {1..10}; do ./atm -p 4000 -s test.auth -a stresstest -d 1.00; done
+
+# Rapid balance checks
+for i in {1..10}; do ./atm -p 4000 -s test.auth -a stresstest -g; done
+
+--------------------------------------------------------------------------------
+CLEANUP
+--------------------------------------------------------------------------------
+
+# Kill bank server (from another terminal)
+pkill -TERM bank
+
+# Remove test files
+rm -f test.auth *.card
+
+================================================================================
+EXIT CODES REFERENCE
+================================================================================
+
+  0   = Success
+  63  = Protocol error (auth failure, network error, wrong card)
+  255 = Other error (validation failure, business logic error)
+
+================================================================================
