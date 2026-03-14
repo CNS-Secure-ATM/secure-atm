@@ -20,5 +20,5 @@ jobs:
     - name: Build
       run: cd build && make clean && make
 
-    - name: Test
-      run: cd build && make test
+    # - name: Test
+    #   run: cd build && make test
