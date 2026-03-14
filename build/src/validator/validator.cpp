@@ -136,8 +136,6 @@ bool is_valid_ipv4(const std::string& ip)
         return false;
     }
     
-    int octets[4];
-    int count = 0;
     size_t pos = 0;
     
     for (int i = 0; i < 4; i++) 
@@ -189,11 +187,10 @@ bool is_valid_ipv4(const std::string& ip)
             return false;
         }
         
-        octets[count++] = val;
         pos = end + 1;
     }
     
-    return count == 4;
+    return true;
 }
 
 std::optional<uint64_t> parse_amount_to_cents(const std::string& amount) 
