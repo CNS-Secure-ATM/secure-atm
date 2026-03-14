@@ -18,10 +18,25 @@ find_package(Threads REQUIRED)
 include_directories(${CMAKE_SOURCE_DIR}/include)
 include_directories(${OPENSSL_INCLUDE_DIR})
 
+# Common library sources
+set(COMMON_SOURCES
+    src/crypto/random.cpp
+    src/crypto/keys.cpp
+    src/crypto/aes_gcm.cpp
+    src/crypto/hmac.cpp
+    src/protocol/framing.cpp
+    src/protocol/session.cpp
+    src/validator/validator.cpp
+)
+
+# Build common static library
+add_library(common STATIC ${COMMON_SOURCES})
+target_link_libraries(common ${OPENSSL_LIBRARIES} Threads::Threads)
+
 # Bank executable
 add_executable(bank src/bank/main.cpp)
-target_link_libraries(bank ${OPENSSL_LIBRARIES} Threads::Threads)
+target_link_libraries(bank common ${OPENSSL_LIBRARIES} Threads::Threads)
 
 # ATM executable  
 add_executable(atm src/atm/main.cpp)
-target_link_libraries(atm ${OPENSSL_LIBRARIES} Threads::Threads)
+target_link_libraries(atm common ${OPENSSL_LIBRARIES} Threads::Threads)
