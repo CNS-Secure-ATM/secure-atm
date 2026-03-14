@@ -34,7 +34,8 @@ static std::unordered_map<std::string, uint64_t> g_accounts;
 static std::mutex g_accounts_mutex;
 
 // Signal handler for graceful shutdown
-void signal_handler(int sig) {
+void signal_handler(int sig) 
+{
     (void)sig;
     g_running = 0;
     if (g_listen_fd >= 0) {
@@ -44,28 +45,33 @@ void signal_handler(int sig) {
 }
 
 // Print protocol error and return
-void protocol_error() {
+void protocol_error() 
+{
     std::cout << "protocol_error" << std::endl;
     std::cout.flush();
 }
 
 // Format JSON number with proper precision (no trailing zeros, but at least one decimal)
-void print_json_result(const json& j) {
+void print_json_result(const json& j) 
+{
     std::cout << j.dump() << std::endl;
     std::cout.flush();
 }
 
 // Process a single client connection
-void handle_client(int client_fd, const crypto::DerivedKeys& keys) {
+void handle_client(int client_fd, const crypto::DerivedKeys& keys) 
+{
     // Set timeout
-    if (!protocol::set_socket_timeout(client_fd, secure::TIMEOUT_SECONDS)) {
+    if (!protocol::set_socket_timeout(client_fd, secure::TIMEOUT_SECONDS)) 
+    {
         close(client_fd);
         protocol_error();
         return;
     }
     
     protocol::Session session(client_fd, keys);
-    if (!session.is_valid()) {
+    if (!session.is_valid()) 
+    {
         close(client_fd);
         protocol_error();
         return;
@@ -73,7 +79,8 @@ void handle_client(int client_fd, const crypto::DerivedKeys& keys) {
     
     // Generate and send challenge
     auto challenge = crypto::random_bytes(secure::CHALLENGE_SIZE);
-    if (challenge.empty()) {
+    if (challenge.empty()) 
+    {
         close(client_fd);
         protocol_error();
         return;
@@ -84,7 +91,8 @@ void handle_client(int client_fd, const crypto::DerivedKeys& keys) {
     challenge_msg["type"] = "challenge";
     challenge_msg["challenge"] = challenge.to_hex();
     
-    if (!session.send(challenge_msg.dump())) {
+    if (!session.send(challenge_msg.dump())) 
+    {
         close(client_fd);
         protocol_error();
         return;
@@ -109,7 +117,8 @@ void handle_client(int client_fd, const crypto::DerivedKeys& keys) {
     
     // Validate request structure
     if (!request.contains("type") || request["type"] != "request" ||
-        !request.contains("operation") || !request.contains("account")) {
+        !request.contains("operation") || !request.contains("account")) 
+    {
         close(client_fd);
         protocol_error();
         return;
@@ -119,7 +128,8 @@ void handle_client(int client_fd, const crypto::DerivedKeys& keys) {
     std::string account = request["account"];
     
     // Validate account name
-    if (!validator::is_valid_account(account)) {
+    if (!validator::is_valid_account(account)) 
+    {
         close(client_fd);
         protocol_error();
         return;
@@ -135,7 +145,8 @@ void handle_client(int client_fd, const crypto::DerivedKeys& keys) {
     
     if (operation == "create") {
         // Create account - no card proof needed
-        if (!request.contains("amount")) {
+        if (!request.contains("amount")) 
+        {
             close(client_fd);
             protocol_error();
             return;
@@ -143,14 +154,16 @@ void handle_client(int client_fd, const crypto::DerivedKeys& keys) {
         
         std::string amount_str = request["amount"];
         auto cents = validator::parse_amount_to_cents(amount_str);
-        if (!cents || *cents < 1000) {  // Minimum $10.00 = 1000 cents
+        if (!cents || *cents < 1000) 
+        {  // Minimum 10.00 = 1000 cents
             close(client_fd);
             protocol_error();
             return;
         }
         
         // Check account doesn't exist
-        if (g_accounts.find(account) != g_accounts.end()) {
+        if (g_accounts.find(account) != g_accounts.end()) 
+        {
             // Account exists - send fail
             response["status"] = "fail";
             session.send(response.dump());
@@ -165,9 +178,12 @@ void handle_client(int client_fd, const crypto::DerivedKeys& keys) {
         response["initial_balance"] = static_cast<double>(*cents) / 100.0;
         success = true;
         
-    } else if (operation == "deposit" || operation == "withdraw" || operation == "balance") {
+    } 
+    else if (operation == "deposit" || operation == "withdraw" || operation == "balance") 
+    {
         // These require card proof
-        if (!request.contains("card_proof")) {
+        if (!request.contains("card_proof"))
+        {
             close(client_fd);
             protocol_error();
             return;
@@ -175,7 +191,8 @@ void handle_client(int client_fd, const crypto::DerivedKeys& keys) {
         
         std::string card_proof_hex = request["card_proof"];
         auto card_proof = secure::SecureBuffer::from_hex(card_proof_hex);
-        if (card_proof.empty() || card_proof.size() != secure::HMAC_SIZE) {
+        if (card_proof.empty() || card_proof.size() != secure::HMAC_SIZE) 
+        {
             close(client_fd);
             protocol_error();
             return;
@@ -186,7 +203,8 @@ void handle_client(int client_fd, const crypto::DerivedKeys& keys) {
         auto expected_proof = crypto::compute_card_proof(expected_secret, session.get_challenge());
         
         // Verify card proof (constant time)
-        if (!crypto::hmac_verify(expected_proof, card_proof)) {
+        if (!crypto::hmac_verify(expected_proof, card_proof)) 
+        {
             close(client_fd);
             protocol_error();
             return;
@@ -194,7 +212,8 @@ void handle_client(int client_fd, const crypto::DerivedKeys& keys) {
         
         // Check account exists
         auto it = g_accounts.find(account);
-        if (it == g_accounts.end()) {
+        if (it == g_accounts.end()) 
+        {
             response["status"] = "fail";
             session.send(response.dump());
             close(client_fd);
@@ -202,8 +221,10 @@ void handle_client(int client_fd, const crypto::DerivedKeys& keys) {
             return;
         }
         
-        if (operation == "deposit") {
-            if (!request.contains("amount")) {
+        if (operation == "deposit") 
+        {
+            if (!request.contains("amount")) 
+            {
                 close(client_fd);
                 protocol_error();
                 return;
@@ -211,14 +232,16 @@ void handle_client(int client_fd, const crypto::DerivedKeys& keys) {
             
             std::string amount_str = request["amount"];
             auto cents = validator::parse_amount_to_cents(amount_str);
-            if (!cents || *cents == 0) {
+            if (!cents || *cents == 0) 
+            {
                 close(client_fd);
                 protocol_error();
                 return;
             }
             
             // Check for overflow
-            if (it->second > UINT64_MAX - *cents) {
+            if (it->second > UINT64_MAX - *cents) 
+            {
                 response["status"] = "fail";
                 session.send(response.dump());
                 close(client_fd);
@@ -231,8 +254,11 @@ void handle_client(int client_fd, const crypto::DerivedKeys& keys) {
             response["deposit"] = static_cast<double>(*cents) / 100.0;
             success = true;
             
-        } else if (operation == "withdraw") {
-            if (!request.contains("amount")) {
+        } 
+        else if (operation == "withdraw") 
+        {
+            if (!request.contains("amount")) 
+            {
                 close(client_fd);
                 protocol_error();
                 return;
@@ -240,14 +266,16 @@ void handle_client(int client_fd, const crypto::DerivedKeys& keys) {
             
             std::string amount_str = request["amount"];
             auto cents = validator::parse_amount_to_cents(amount_str);
-            if (!cents || *cents == 0) {
+            if (!cents || *cents == 0) 
+            {
                 close(client_fd);
                 protocol_error();
                 return;
             }
             
             // Check sufficient funds
-            if (it->second < *cents) {
+            if (it->second < *cents) 
+            {
                 response["status"] = "fail";
                 session.send(response.dump());
                 close(client_fd);
@@ -260,19 +288,24 @@ void handle_client(int client_fd, const crypto::DerivedKeys& keys) {
             response["withdraw"] = static_cast<double>(*cents) / 100.0;
             success = true;
             
-        } else if (operation == "balance") {
+        } 
+        else if (operation == "balance") 
+        {
             response["status"] = "success";
             response["balance"] = static_cast<double>(it->second) / 100.0;
             success = true;
         }
-    } else {
+    } 
+    else 
+    {
         close(client_fd);
         protocol_error();
         return;
     }
     
     // Send response
-    if (!session.send(response.dump())) {
+    if (!session.send(response.dump())) 
+    {
         close(client_fd);
         protocol_error();
         return;
@@ -281,23 +314,32 @@ void handle_client(int client_fd, const crypto::DerivedKeys& keys) {
     close(client_fd);
     
     // Print result on success
-    if (success) {
+    if (success) 
+    {
         json output;
         output["account"] = account;
-        if (operation == "create") {
+        if (operation == "create") 
+        {
             output["initial_balance"] = response["initial_balance"];
-        } else if (operation == "deposit") {
+        } 
+        else if (operation == "deposit") 
+        {
             output["deposit"] = response["deposit"];
-        } else if (operation == "withdraw") {
+        } 
+        else if (operation == "withdraw")
+        {
             output["withdraw"] = response["withdraw"];
-        } else if (operation == "balance") {
+        } 
+        else if (operation == "balance") 
+        {
             output["balance"] = response["balance"];
         }
         print_json_result(output);
     }
 }
 
-int main(int argc, char* argv[]) {
+int main(int argc, char* argv[]) 
+{
     // Default values
     int port = 3000;
     std::string auth_file = "bank.auth";
@@ -306,14 +348,17 @@ int main(int argc, char* argv[]) {
     bool seen_p = false, seen_s = false;
     
     int opt;
-    while ((opt = getopt(argc, argv, "p:s:")) != -1) {
-        switch (opt) {
+    while ((opt = getopt(argc, argv, "p:s:")) != -1) 
+    {
+        switch (opt) 
+        {
             case 'p':
                 if (seen_p) return exitcode::OTHER_ERROR;
                 seen_p = true;
                 {
                     auto parsed = validator::parse_port(optarg);
-                    if (!parsed || !validator::is_valid_port(*parsed)) {
+                    if (!parsed || !validator::is_valid_port(*parsed)) 
+                    {
                         return exitcode::OTHER_ERROR;
                     }
                     port = *parsed;
@@ -323,7 +368,8 @@ int main(int argc, char* argv[]) {
                 if (seen_s) return exitcode::OTHER_ERROR;
                 seen_s = true;
                 auth_file = optarg;
-                if (!validator::is_valid_filename(auth_file)) {
+                if (!validator::is_valid_filename(auth_file)) 
+                {
                     return exitcode::OTHER_ERROR;
                 }
                 break;
@@ -333,7 +379,8 @@ int main(int argc, char* argv[]) {
     }
     
     // Check for extra arguments
-    if (optind != argc) {
+    if (optind != argc) 
+    {
         return exitcode::OTHER_ERROR;
     }
     
@@ -347,7 +394,8 @@ int main(int argc, char* argv[]) {
     
     // Generate master key
     auto master_key = crypto::generate_master_key();
-    if (master_key.empty()) {
+    if (master_key.empty()) 
+    {
         return exitcode::OTHER_ERROR;
     }
     
@@ -359,7 +407,8 @@ int main(int argc, char* argv[]) {
         }
         out << master_key.to_hex();
         out.close();
-        if (!out.good()) {
+        if (!out.good()) 
+        {
             std::remove(auth_file.c_str());
             return exitcode::OTHER_ERROR;
         }
@@ -371,7 +420,8 @@ int main(int argc, char* argv[]) {
     
     // Derive keys
     auto keys = crypto::derive_keys(master_key);
-    if (!keys.valid()) {
+    if (!keys.valid()) 
+    {
         std::remove(auth_file.c_str());
         return exitcode::OTHER_ERROR;
     }
@@ -385,7 +435,8 @@ int main(int argc, char* argv[]) {
     
     // Create socket
     g_listen_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (g_listen_fd < 0) {
+    if (g_listen_fd < 0) 
+    {
         return exitcode::OTHER_ERROR;
     }
     
@@ -400,26 +451,30 @@ int main(int argc, char* argv[]) {
     addr.sin_addr.s_addr = INADDR_ANY;
     addr.sin_port = htons(static_cast<uint16_t>(port));
     
-    if (bind(g_listen_fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) < 0) {
+    if (bind(g_listen_fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) < 0) 
+    {
         close(g_listen_fd);
         return exitcode::OTHER_ERROR;
     }
     
     // Listen
-    if (listen(g_listen_fd, 5) < 0) {
+    if (listen(g_listen_fd, 5) < 0) 
+    {
         close(g_listen_fd);
         return exitcode::OTHER_ERROR;
     }
     
     // Accept loop
-    while (g_running) {
+    while (g_running) 
+    {
         struct sockaddr_in client_addr;
         socklen_t client_len = sizeof(client_addr);
         
         int client_fd = accept(g_listen_fd, 
             reinterpret_cast<struct sockaddr*>(&client_addr), &client_len);
         
-        if (client_fd < 0) {
+        if (client_fd < 0) 
+        {
             if (!g_running) break;  // SIGTERM received
             continue;  // Accept error, continue
         }
@@ -427,7 +482,8 @@ int main(int argc, char* argv[]) {
         handle_client(client_fd, keys);
     }
     
-    if (g_listen_fd >= 0) {
+    if (g_listen_fd >= 0) 
+    {
         close(g_listen_fd);
     }
     
