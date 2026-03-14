@@ -2,43 +2,6 @@
 
 A secure client-server ATM simulation implementing encrypted communication with mutual authentication.
 
-## Project Structure
-
-```
-build/
-|-- Makefile              # Build wrapper (run `make` here)
-|-- CMakeLists.txt        # CMake build configuration
-|-- README.md             # This file
-|-- include/
-|   |-- common/
-|   |   |-- types.hpp     # SecureBuffer (RAII memory wiping), constants
-|   |   +-- exitcodes.hpp # Exit codes (0=success, 63=protocol, 255=other)
-|   |-- crypto/
-|   |   |-- random.hpp    # Cryptographic random number generation
-|   |   |-- keys.hpp      # HKDF key derivation
-|   |   |-- aes_gcm.hpp   # AES-256-GCM encryption/decryption
-|   |   +-- hmac.hpp      # HMAC-SHA256, card secrets
-|   |-- protocol/
-|   |   |-- framing.hpp   # Length-prefixed message framing
-|   |   +-- session.hpp   # Encrypted session management
-|   |-- validator/
-|   |   +-- validator.hpp # Input validation utilities
-|   +-- nlohmann/
-|       +-- json.hpp      # JSON library (vendored)
-|-- src/
-|   |-- crypto/           # Crypto implementation
-|   |-- protocol/         # Protocol implementation
-|   |-- validator/        # Validation implementation
-|   |-- bank/main.cpp     # Bank server
-|   +-- atm/main.cpp      # ATM client
-+-- tests/
-    |-- test_framework.hpp    # Minimal test framework
-    |-- test_validator.cpp    # Validator unit tests
-    |-- test_crypto.cpp       # Crypto unit tests
-    |-- test_protocol.cpp     # Protocol unit tests
-    +-- test_integration.sh   # End-to-end integration tests
-```
-
 ## Prerequisites
 
 - **C++17** compatible compiler (g++ or clang++)
@@ -68,18 +31,6 @@ make
 ```
 
 This produces two executables: `bank` and `atm`.
-
-## Run Tests
-
-```bash
-cd build
-make test
-```
-
-This runs:
-
-1. **Unit tests** — validator, crypto, and protocol tests
-2. **Integration tests** — end-to-end bank/atm scenarios
 
 ## Usage
 
