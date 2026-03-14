@@ -1,15 +1,33 @@
 # Thin wrapper Makefile for spec compliance
 # Usage: cd build && make
 
-.PHONY: all clean test
+.PHONY: all clean test bank atm clean-files
 
 all:
 	@mkdir -p _build
-	@cd _build && cmake .. -DCMAKE_BUILD_TYPE=Release >/dev/null 2>&1
+	@cd _build && cmake .. -DCMAKE_BUILD_TYPE=Release
 	@cd _build && $(MAKE) --no-print-directory
-	@mkdir -p atmdir bankdir
-	@cp _build/atm atmdir/atm
+	@cp _build/bank _build/atm .
+
+clean:
+	@rm -rf _build bank atm test_validator test_crypto test_protocol **/*.auth **/*.card atmdir bankdir
+
+clean-files:
+	@rm -f **/*.auth **/*.card
+
+bank:
+	$(MAKE) clean
+	$(MAKE)
+	@rm -f atm bank
+	@mkdir -p bankdir
 	@cp _build/bank bankdir/bank
+
+atm:
+	$(MAKE) clean
+	$(MAKE)
+	@rm -f atm bank
+	@mkdir -p atmdir
+	@cp _build/atm atmdir/atm
 
 test: all
 	@cd _build && $(MAKE) test_validator test_crypto test_protocol --no-print-directory
@@ -19,9 +37,3 @@ test: all
 	@echo ""
 	@echo "Running integration tests..."
 	@bash tests/test_integration.sh
-
-clean:
-	@rm -rf _build bank atm test_validator test_crypto test_protocol *.auth *.card atmdir bankdir
-
-clean-file:
-	@rm -f atmdir/*.auth bankdir/*.auth atmdir/*.card bankdir/*.card
