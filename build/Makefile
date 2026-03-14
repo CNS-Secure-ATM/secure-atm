@@ -5,7 +5,7 @@
 
 all:
 	@mkdir -p _build
-	@cd _build && cmake .. -DCMAKE_BUILD_TYPE=Release
+	@cd _build && cmake .. -DCMAKE_BUILD_TYPE=Release >/dev/null 2>&1
 	@cd _build && $(MAKE) --no-print-directory
 	@cp _build/bank _build/atm .
 
