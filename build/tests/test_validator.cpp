@@ -191,6 +191,50 @@ TEST(port_invalid_high) {
     return true;
 }
 
+TEST(parse_port_valid_values) {
+    auto port = validator::parse_port("0");
+    EXPECT_TRUE(port.has_value());
+    EXPECT_EQ(*port, 0);
+
+    port = validator::parse_port("1024");
+    EXPECT_TRUE(port.has_value());
+    EXPECT_EQ(*port, 1024);
+
+    port = validator::parse_port("65535");
+    EXPECT_TRUE(port.has_value());
+    EXPECT_EQ(*port, 65535);
+    return true;
+}
+
+TEST(parse_port_rejects_bad_format) {
+    EXPECT_FALSE(validator::parse_port("").has_value());
+    EXPECT_FALSE(validator::parse_port("01").has_value());
+    EXPECT_FALSE(validator::parse_port("00080").has_value());
+    EXPECT_FALSE(validator::parse_port("-1").has_value());
+    EXPECT_FALSE(validator::parse_port("+80").has_value());
+    EXPECT_FALSE(validator::parse_port("80 ").has_value());
+    EXPECT_FALSE(validator::parse_port(" 80").has_value());
+    EXPECT_FALSE(validator::parse_port("8O8O").has_value());
+    return true;
+}
+
+TEST(parse_port_rejects_out_of_range) {
+    EXPECT_FALSE(validator::parse_port("65536").has_value());
+    EXPECT_FALSE(validator::parse_port("99999").has_value());
+    EXPECT_FALSE(validator::parse_port("100000").has_value());
+    return true;
+}
+
+TEST(port_string_validation_range) {
+    EXPECT_FALSE(validator::is_valid_port("0"));
+    EXPECT_FALSE(validator::is_valid_port("80"));
+    EXPECT_FALSE(validator::is_valid_port("1023"));
+    EXPECT_TRUE(validator::is_valid_port("1024"));
+    EXPECT_TRUE(validator::is_valid_port("65535"));
+    EXPECT_FALSE(validator::is_valid_port("65536"));
+    return true;
+}
+
 // ============================================================================
 // IPv4 validation tests
 // ============================================================================
