@@ -36,6 +36,7 @@ std::optional<EncryptedData> aes_gcm_encrypt(
     
     bool success = false;
     do {
+        // EVP_EncryptInit_ex(ctx, type, engine, key, iv)
         if (EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), nullptr, nullptr, nullptr) != 1) break;
         if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, secure::NONCE_SIZE, nullptr) != 1) break;
         if (EVP_EncryptInit_ex(ctx, nullptr, nullptr, key.data(), result.nonce.data()) != 1) break;
@@ -44,6 +45,7 @@ std::optional<EncryptedData> aes_gcm_encrypt(
         int len = 0;
         if (aad != nullptr && aad_len > 0) 
         {
+            // EVP_EncryptUpdate(ctx, out, outlen, in, inlen)
             if (EVP_EncryptUpdate(ctx, nullptr, &len, aad, static_cast<int>(aad_len)) != 1) break;
         }
         
