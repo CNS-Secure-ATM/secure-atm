@@ -40,3 +40,28 @@ target_link_libraries(bank common ${OPENSSL_LIBRARIES} Threads::Threads)
 # ATM executable  
 add_executable(atm src/atm/main.cpp)
 target_link_libraries(atm common ${OPENSSL_LIBRARIES} Threads::Threads)
+
+# ============================================================================
+# Tests
+# ============================================================================
+enable_testing()
+
+# Test executables
+add_executable(test_validator tests/test_validator.cpp)
+target_link_libraries(test_validator common ${OPENSSL_LIBRARIES})
+
+add_executable(test_crypto tests/test_crypto.cpp)
+target_link_libraries(test_crypto common ${OPENSSL_LIBRARIES})
+
+add_executable(test_protocol tests/test_protocol.cpp)
+target_link_libraries(test_protocol common ${OPENSSL_LIBRARIES})
+
+# Register tests with CTest
+add_test(NAME validator_tests COMMAND test_validator)
+add_test(NAME crypto_tests COMMAND test_crypto)
+add_test(NAME protocol_tests COMMAND test_protocol)
+
+# Integration test (runs from build directory)
+add_test(NAME integration_tests 
+         COMMAND ${CMAKE_COMMAND} -E env bash ${CMAKE_SOURCE_DIR}/tests/test_integration.sh
+         WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
