@@ -10,10 +10,11 @@ all:
 	@cp _build/bank _build/atm .
 
 clean:
-	@rm -rf _build bank atm test_validator test_crypto test_protocol **/*.auth **/*.card atmdir bankdir
+	@rm -rf _build bank atm test_validator test_crypto test_protocol atmdir bankdir
+	@find .. -type f \( -name '*.auth' -o -name '*.card' \) -exec rm -f {} +
 
 clean-files:
-	@rm -f **/*.auth **/*.card
+	@find .. -type f \( -name '*.auth' -o -name '*.card' \) -exec rm -f {} +
 
 bank:
 	$(MAKE) clean
