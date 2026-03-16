@@ -1,6 +1,3 @@
-# Thin wrapper Makefile for spec compliance
-# Usage: cd build && make
-
 .PHONY: all clean test bank atm clean-files
 
 all:
@@ -11,10 +8,10 @@ all:
 
 clean:
 	@rm -rf _build bank atm test_validator test_crypto test_protocol atmdir bankdir
-	@find .. -type f \( -name '*.auth' -o -name '*.card' \) -exec rm -f {} +
+	@find . -type f \( -name '*.auth' -o -name '*.card' \) -exec rm -f {} +
 
 clean-files:
-	@find .. -type f \( -name '*.auth' -o -name '*.card' \) -exec rm -f {} +
+	@find . -type f \( -name '*.auth' -o -name '*.card' \) -exec rm -f {} +
 
 bank:
 	$(MAKE) clean
