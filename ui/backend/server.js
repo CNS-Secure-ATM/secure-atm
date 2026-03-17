@@ -103,7 +103,17 @@ app.use((err, req, res, next) => {
 const spaDir = path.join(__dirname, '..', 'frontend', 'dist');
 if (fs.existsSync(spaDir)) {
   app.use(express.static(spaDir));
-  app.get('*', (req, res) => res.sendFile(path.join(spaDir, 'index.html')));
+  // Only fall back to index.html for extensionless paths (real SPA routes).
+  // Requests with a file extension (.js, .css, .png …) that were not found by
+  // express.static get a 404 instead of HTML – this prevents browser extensions
+  // (React DevTools etc.) from receiving index.html when they fetch their own
+  // scripts (utils.js, extensionState.js, heuristicRedefinitions.js, …).
+  app.get('*', (req, res) => {
+    if (path.extname(req.path)) {
+      return res.status(404).end();
+    }
+    res.sendFile(path.join(spaDir, 'index.html'));
+  });
 } else {
   app.get('/', (req, res) => {
     res.send(
