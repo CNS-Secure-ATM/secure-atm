@@ -9,3 +9,5 @@ local_build/
 **/bank
 **/*.auth
 **/*.card
+**/ui/backend/.env
+**/node_modules/
