@@ -8,15 +8,15 @@ A single-page browser interface for the ATM client. A thin Node.js/Express backe
 
 ```
 Browser (React SPA)
-      │
-      │  POST /api/transaction (JSON)
-      ▼
-Node.js backend  ──spawn(atm, argv)──▶  atm binary  ──TCP──▶  bank server
-      │                                    │
-      │                              reads/writes
-      │                           bank.auth  *.card
-      │
-      ◀── JSON result ──────────────────────
+      |
+      |  POST /api/transaction (JSON)
+      V
+Node.js backend  ---- spawn(atm, argv) --->  atm binary --- TCP --> bank server
+      |                                    |
+      |                              reads/writes
+      |                           bank.auth  *.card
+      |                                    |
+      <-- JSON result ----------------------
 ```
 
 - **Secrets never leave the server.** The auth file and card files are accessed only by the `atm` binary; the browser never sees them.
@@ -27,15 +27,24 @@ Node.js backend  ──spawn(atm, argv)──▶  atm binary  ──TCP──▶
 
 ## Prerequisites
 
-| Requirement | Notes |
-|---|---|
+| Requirement              | Notes                                  |
+| ------------------------ | -------------------------------------- |
 | **C++ bank + atm built** | `cd build && make` must have succeeded |
-| **Node.js ≥ 18** | `node --version` to check |
-| **npm** | Comes with Node |
+| **Node.js ≥ 18**         | `node --version` to check              |
+| **npm**                  | Comes with Node                        |
 
 ---
 
 ## Quick start
+
+### Run Makefile
+
+```bash
+cd secure-atm/ui
+make
+```
+
+**OR**
 
 ### 1. Start the bank server
 
@@ -108,14 +117,14 @@ npm run dev
 
 All settings have sensible defaults pointing at `build/`:
 
-| Variable | Default (relative to `ui/backend/`) | Description |
-|---|---|---|
-| `PORT` | `4000` | Port the backend listens on |
-| `ATM_BIN` | `../../build/atm` | Path to the compiled atm binary |
-| `AUTH_FILE` | `../../build/bank.auth` | Path to the shared auth file |
-| `CARD_DIR` | `../../build` | Directory where `<account>.card` files live |
-| `BANK_HOST` | `127.0.0.1` | Default bank IP (overridable per request) |
-| `BANK_PORT` | `3000` | Default bank port (overridable per request) |
+| Variable    | Default (relative to `ui/backend/`) | Description                                 |
+| ----------- | ----------------------------------- | ------------------------------------------- |
+| `PORT`      | `4000`                              | Port the backend listens on                 |
+| `ATM_BIN`   | `../../build/atm`                   | Path to the compiled atm binary             |
+| `AUTH_FILE` | `../../build/bank.auth`             | Path to the shared auth file                |
+| `CARD_DIR`  | `../../build`                       | Directory where `<account>.card` files live |
+| `BANK_HOST` | `127.0.0.1`                         | Default bank IP (overridable per request)   |
+| `BANK_PORT` | `3000`                              | Default bank port (overridable per request) |
 
 ---
 
@@ -129,11 +138,11 @@ Submit an ATM transaction.
 
 ```json
 {
-  "account":   "alice",
+  "account": "alice",
   "operation": "balance",
-  "amount":    "100.00",
-  "bankHost":  "127.0.0.1",
-  "bankPort":  3000
+  "amount": "100.00",
+  "bankHost": "127.0.0.1",
+  "bankPort": 3000
 }
 ```
 
@@ -143,7 +152,7 @@ Submit an ATM transaction.
 **Successful response:**
 
 ```json
-{ "ok": true, "data": { "account": "alice", "balance": 1000.00 } }
+{ "ok": true, "data": { "account": "alice", "balance": 1000.0 } }
 ```
 
 **Error response:**
@@ -152,10 +161,10 @@ Submit an ATM transaction.
 { "ok": false, "exitCode": 63, "message": "protocol_error" }
 ```
 
-| Exit code | Meaning |
-|---|---|
-| `63` | Network / protocol error (bank unreachable, auth failure, timeout) |
-| `255` | Business error (wrong card, insufficient funds, account exists…) |
+| Exit code | Meaning                                                            |
+| --------- | ------------------------------------------------------------------ |
+| `63`      | Network / protocol error (bank unreachable, auth failure, timeout) |
+| `255`     | Business error (wrong card, insufficient funds, account exists…)   |
 
 ### `GET /api/accounts`
 
@@ -168,7 +177,13 @@ Returns the list of accounts that have a `.card` file in `CARD_DIR`.
 ### `GET /api/health`
 
 ```json
-{ "ok": true, "atm": true, "auth": true, "bankHost": "127.0.0.1", "bankPort": 3000 }
+{
+  "ok": true,
+  "atm": true,
+  "auth": true,
+  "bankHost": "127.0.0.1",
+  "bankPort": 3000
+}
 ```
 
 ---
@@ -177,21 +192,22 @@ Returns the list of accounts that have a `.card` file in `CARD_DIR`.
 
 ```
 ui/
-├── README.md              ← you are here
-├── backend/
-│   ├── package.json
-│   ├── .env.example
-│   ├── server.js          Express app + static SPA serving
-│   ├── config.js          Env/defaults loader
-│   ├── validate.js        Input validation (mirrors C++ ATM rules)
-│   └── runAtm.js          argv builder + child_process.spawn wrapper
-└── frontend/
-    ├── package.json
-    ├── vite.config.js
-    ├── index.html
-    └── src/
-        ├── main.jsx
-        ├── App.jsx        Single-page UI
-        ├── App.css
-        └── api.js         fetch() helpers
++-- README.md
++-- Makefile
++-- backend/
+|   +-- package.json
+|   +-- .env.example
+|   +-- server.js          Express app + static SPA serving
+|   +-- config.js          Env/defaults loader
+|   +-- validate.js        Input validation (mirrors C++ ATM rules)
+|   +-- runAtm.js          argv builder + child_process.spawn wrapper
++-- frontend/
+    +-- package.json
+    +-- vite.config.js
+    +-- index.html
+    +-- src/
+        +-- main.jsx
+        +-- App.jsx        Single-page UI
+        +-- App.css
+        +-- api.js         fetch() helpers
 ```
