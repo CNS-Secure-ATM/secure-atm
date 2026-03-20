@@ -45,6 +45,27 @@ void print_json_result(const json& j) {
     std::cout.flush();
 }
 
+void print_usage(const char* prog_name) {
+    std::cout << "Usage:\n";
+    std::cout << "  " << prog_name << " [-s <auth-file>] [-i <ip-address>] [-p <port>] [-c <card-file>] -a <account> -n <amount>\n";
+    std::cout << "  " << prog_name << " [-s <auth-file>] [-i <ip-address>] [-p <port>] [-c <card-file>] -a <account> -d <amount>\n";
+    std::cout << "  " << prog_name << " [-s <auth-file>] [-i <ip-address>] [-p <port>] [-c <card-file>] -a <account> -w <amount>\n";
+    std::cout << "  " << prog_name << " [-s <auth-file>] [-i <ip-address>] [-p <port>] [-c <card-file>] -a <account> -g\n";
+    std::cout << "  " << prog_name << " -h | --help\n\n";
+    std::cout << "Options:\n";
+    std::cout << "  -s <auth-file>  Bank auth file (default: bank.auth)\n";
+    std::cout << "  -i <ip-address> Bank IPv4 address (default: 127.0.0.1)\n";
+    std::cout << "  -p <port>       Bank port (default: 3000)\n";
+    std::cout << "  -c <card-file>  Card file (default: <account>.card)\n";
+    std::cout << "  -a <account>    Account name (required)\n";
+    std::cout << "  -n <amount>     Create account with initial balance (>= 10.00)\n";
+    std::cout << "  -d <amount>     Deposit amount (> 0.00)\n";
+    std::cout << "  -w <amount>     Withdraw amount (> 0.00)\n";
+    std::cout << "  -g              Get account balance\n";
+    std::cout << "  -h, --help      Show this help message\n";
+    std::cout.flush();
+}
+
 // Read auth file and derive keys
 bool read_auth_file(const std::string& filename, crypto::DerivedKeys& keys) {
     std::ifstream in(filename);
@@ -139,6 +160,18 @@ int connect_to_bank(const std::string& ip, int port) {
 }
 
 int main(int argc, char* argv[]) {
+    if (argc == 1) {
+        print_usage(argv[0]);
+        return exitcode::OTHER_ERROR;
+    }
+
+    for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) == "--help") {
+            print_usage(argv[0]);
+            return exitcode::SUCCESS;
+        }
+    }
+
     Options opts;
     
     // Track seen flags
@@ -147,8 +180,11 @@ int main(int argc, char* argv[]) {
     bool seen_n = false, seen_d = false, seen_w = false, seen_g = false;
     
     int opt;
-    while ((opt = getopt(argc, argv, "s:i:p:c:a:n:d:w:g")) != -1) {
+    while ((opt = getopt(argc, argv, "hs:i:p:c:a:n:d:w:g")) != -1) {
         switch (opt) {
+            case 'h':
+                print_usage(argv[0]);
+                return exitcode::SUCCESS;
             case 's':
                 if (seen_s) return exitcode::OTHER_ERROR;
                 seen_s = true;

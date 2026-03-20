@@ -5,6 +5,8 @@
 **/_build/
 **/dist/
 local_build/
+**/atmdir/
+**/bankdir/
 **/atm
 **/bank
 **/*.auth

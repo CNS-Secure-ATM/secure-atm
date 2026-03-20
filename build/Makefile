@@ -13,15 +13,23 @@ clean:
 clean-files:
 	@find . -type f \( -name '*.auth' -o -name '*.card' \) -exec rm -f {} +
 
+clean-bank:
+	@rm -rf _build bank test_validator test_crypto test_protocol bankdir
+	@find . -type f \( -name '*.auth' -o -name '*.card' \) -exec rm -f {} +
+
+clean-atm:
+	@rm -rf _build atm test_validator test_crypto test_protocol atmdir
+	@find . -type f \( -name '*.auth' -o -name '*.card' \) -exec rm -f {} +
+
 bank:
-	$(MAKE) clean
+	$(MAKE) clean-bank
 	$(MAKE)
 	@rm -f atm bank
 	@mkdir -p bankdir
 	@cp _build/bank bankdir/bank
 
 atm:
-	$(MAKE) clean
+	$(MAKE) clean-atm
 	$(MAKE)
 	@rm -f atm bank
 	@mkdir -p atmdir
