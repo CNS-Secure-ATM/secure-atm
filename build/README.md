@@ -52,7 +52,7 @@ Example:
 ### 2. Run ATM Operations
 
 ```bash
-./atm [-s <auth-file>] [-i <ip>] [-p <port>] [-c <card-file>] -a <account> <operation>
+./atm [-s <auth-file>] [-i <ip>] [-p <port>] [-c <card-file> | -C <card-content-hex>] -a <account> <operation>
 ```
 
 **Options:**
@@ -61,7 +61,10 @@ Example:
 - `-i <ip>`: Bank IP address (default: 127.0.0.1)
 - `-p <port>`: Bank port (default: 3000)
 - `-c <card-file>`: Card file (default: <account>.card)
+- `-C <card-content-hex>`: Direct card content (64 hex chars), use instead of `-c`
 - `-a <account>`: Account name (required)
+- `-m`: Create mode only; print new card content to stdout JSON instead of writing card file
+- `-h` / `--help`: Show usage/help
 
 **Operations:**
 
@@ -70,20 +73,35 @@ Example:
 - `-w <amount>`: Withdraw funds
 - `-g`: Get balance
 
+**Flag constraints:**
+
+- `-c` and `-C` are mutually exclusive
+- `-C` is valid only for `-d`, `-w`, `-g`
+- `-m` is valid only with `-n`
+
 **Examples:**
 
 ```bash
 # Create account with $1000
 ./atm -s mybank.auth -p 4000 -a alice -n 1000.00
 
+# Create account and print card content to stdout (no .card file written)
+./atm -s mybank.auth -p 4000 -a bob -n 1000.00 -m
+
 # Deposit $500
 ./atm -s mybank.auth -p 4000 -a alice -d 500.00
+
+# Deposit using direct card content instead of card file
+./atm -s mybank.auth -p 4000 -a alice -d 500.00 -C <64_hex_card_content>
 
 # Withdraw $200
 ./atm -s mybank.auth -p 4000 -a alice -w 200.00
 
 # Check balance
 ./atm -s mybank.auth -p 4000 -a alice -g
+
+# Show help
+./atm --help
 ```
 
 ## How It Works

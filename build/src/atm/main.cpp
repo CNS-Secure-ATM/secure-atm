@@ -34,9 +34,11 @@ struct Options {
     std::string ip_address = "127.0.0.1";
     int port = 3000;
     std::string card_file;  // Default: <account>.card
+    std::string card_content; // Optional: direct card content (hex)
     std::string account;
     Mode mode = Mode::NONE;
     std::string amount;  // For -n, -d, -w
+    bool print_card_stdout = false; // Optional: print new card content instead of writing file
 };
 
 // Print JSON result
@@ -47,18 +49,20 @@ void print_json_result(const json& j) {
 
 void print_usage(const char* prog_name) {
     std::cout << "Usage:\n";
-    std::cout << "  " << prog_name << " [-s <auth-file>] [-i <ip-address>] [-p <port>] [-c <card-file>] -a <account> -n <amount>\n";
-    std::cout << "  " << prog_name << " [-s <auth-file>] [-i <ip-address>] [-p <port>] [-c <card-file>] -a <account> -d <amount>\n";
-    std::cout << "  " << prog_name << " [-s <auth-file>] [-i <ip-address>] [-p <port>] [-c <card-file>] -a <account> -w <amount>\n";
-    std::cout << "  " << prog_name << " [-s <auth-file>] [-i <ip-address>] [-p <port>] [-c <card-file>] -a <account> -g\n";
+    std::cout << "  " << prog_name << " [-s <auth-file>] [-i <ip-address>] [-p <port>] [-c <card-file>] -a <account> -n <amount> [-m]\n";
+    std::cout << "  " << prog_name << " [-s <auth-file>] [-i <ip-address>] [-p <port>] (-c <card-file> | -C <card-content-hex>) -a <account> -d <amount>\n";
+    std::cout << "  " << prog_name << " [-s <auth-file>] [-i <ip-address>] [-p <port>] (-c <card-file> | -C <card-content-hex>) -a <account> -w <amount>\n";
+    std::cout << "  " << prog_name << " [-s <auth-file>] [-i <ip-address>] [-p <port>] (-c <card-file> | -C <card-content-hex>) -a <account> -g\n";
     std::cout << "  " << prog_name << " -h | --help\n\n";
     std::cout << "Options:\n";
     std::cout << "  -s <auth-file>  Bank auth file (default: bank.auth)\n";
     std::cout << "  -i <ip-address> Bank IPv4 address (default: 127.0.0.1)\n";
     std::cout << "  -p <port>       Bank port (default: 3000)\n";
     std::cout << "  -c <card-file>  Card file (default: <account>.card)\n";
+    std::cout << "  -C <content>    Card content (64 hex chars), use instead of -c\n";
     std::cout << "  -a <account>    Account name (required)\n";
     std::cout << "  -n <amount>     Create account with initial balance (>= 10.00)\n";
+    std::cout << "  -m              Create mode only: print new card content to stdout JSON and do not write card file\n";
     std::cout << "  -d <amount>     Deposit amount (> 0.00)\n";
     std::cout << "  -w <amount>     Withdraw amount (> 0.00)\n";
     std::cout << "  -g              Get account balance\n";
@@ -173,14 +177,15 @@ int main(int argc, char* argv[]) {
     }
 
     Options opts;
+    std::string created_card_hex;
     
     // Track seen flags
     bool seen_s = false, seen_i = false, seen_p = false;
-    bool seen_c = false, seen_a = false;
+    bool seen_c = false, seen_C = false, seen_a = false, seen_m = false;
     bool seen_n = false, seen_d = false, seen_w = false, seen_g = false;
     
     int opt;
-    while ((opt = getopt(argc, argv, "hs:i:p:c:a:n:d:w:g")) != -1) {
+    while ((opt = getopt(argc, argv, "hs:i:p:c:C:a:n:d:w:gm")) != -1) {
         switch (opt) {
             case 'h':
                 print_usage(argv[0]);
@@ -220,6 +225,11 @@ int main(int argc, char* argv[]) {
                     return exitcode::OTHER_ERROR;
                 }
                 break;
+            case 'C':
+                if (seen_C) return exitcode::OTHER_ERROR;
+                seen_C = true;
+                opts.card_content = optarg;
+                break;
             case 'a':
                 if (seen_a) return exitcode::OTHER_ERROR;
                 seen_a = true;
@@ -251,6 +261,11 @@ int main(int argc, char* argv[]) {
                 seen_g = true;
                 opts.mode = Mode::BALANCE;
                 break;
+            case 'm':
+                if (seen_m) return exitcode::OTHER_ERROR;
+                seen_m = true;
+                opts.print_card_stdout = true;
+                break;
             default:
                 return exitcode::OTHER_ERROR;
         }
@@ -263,6 +278,21 @@ int main(int argc, char* argv[]) {
     
     // Required: account and mode
     if (!seen_a || opts.mode == Mode::NONE) {
+        return exitcode::OTHER_ERROR;
+    }
+
+    // -c and -C are mutually exclusive
+    if (seen_c && seen_C) {
+        return exitcode::OTHER_ERROR;
+    }
+
+    // -m is create-mode only
+    if (opts.print_card_stdout && opts.mode != Mode::CREATE) {
+        return exitcode::OTHER_ERROR;
+    }
+
+    // -C is only meaningful for non-create operations
+    if (seen_C && opts.mode == Mode::CREATE) {
         return exitcode::OTHER_ERROR;
     }
     
@@ -285,8 +315,8 @@ int main(int argc, char* argv[]) {
         }
     }
     
-    // Default card file
-    if (opts.card_file.empty()) {
+    // Default card file (if card content was not supplied directly)
+    if (opts.card_file.empty() && !seen_C) {
         opts.card_file = opts.account + ".card";
         if (!validator::is_valid_filename(opts.card_file)) {
             return exitcode::OTHER_ERROR;
@@ -303,13 +333,26 @@ int main(int argc, char* argv[]) {
     // For other modes, card file must exist
     secure::SecureBuffer card_secret;
     if (opts.mode == Mode::CREATE) {
-        std::ifstream check(opts.card_file);
-        if (check.good()) {
-            return exitcode::OTHER_ERROR;  // Card file exists
+        if (!opts.print_card_stdout) {
+            std::ifstream check(opts.card_file);
+            if (check.good()) {
+                return exitcode::OTHER_ERROR;  // Card file exists
+            }
         }
     } else {
-        if (!read_card_file(opts.card_file, card_secret)) {
-            return exitcode::OTHER_ERROR;
+        if (seen_C) {
+            opts.card_content.erase(std::remove_if(opts.card_content.begin(), opts.card_content.end(), ::isspace), opts.card_content.end());
+            if (opts.card_content.size() != secure::KEY_SIZE * 2) {
+                return exitcode::OTHER_ERROR;
+            }
+            card_secret = secure::SecureBuffer::from_hex(opts.card_content);
+            if (card_secret.size() != secure::KEY_SIZE) {
+                return exitcode::OTHER_ERROR;
+            }
+        } else {
+            if (!read_card_file(opts.card_file, card_secret)) {
+                return exitcode::OTHER_ERROR;
+            }
         }
     }
     
@@ -434,8 +477,12 @@ int main(int argc, char* argv[]) {
     // For create mode, create the card file
     if (opts.mode == Mode::CREATE) {
         auto new_card_secret = crypto::compute_card_secret(keys.k_card, opts.account);
-        if (!write_card_file(opts.card_file, new_card_secret)) {
-            return exitcode::OTHER_ERROR;
+        if (!opts.print_card_stdout) {
+            if (!write_card_file(opts.card_file, new_card_secret)) {
+                return exitcode::OTHER_ERROR;
+            }
+        } else {
+            created_card_hex = new_card_secret.to_hex();
         }
     }
     
@@ -447,6 +494,9 @@ int main(int argc, char* argv[]) {
         case Mode::CREATE:
             if (response.contains("initial_balance")) {
                 output["initial_balance"] = response["initial_balance"];
+            }
+            if (!created_card_hex.empty()) {
+                output["card"] = created_card_hex;
             }
             break;
         case Mode::DEPOSIT:
