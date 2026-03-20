@@ -20,6 +20,7 @@ secure::SecureBuffer hkdf_sha256(
 {
     secure::SecureBuffer output(length);
     
+    // https://docs.openssl.org/3.5/man3/EVP_PKEY_CTX_set_hkdf_md/#string-ctrls
     EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_HKDF, nullptr);
     if (ctx == nullptr) 
     {
@@ -29,7 +30,20 @@ secure::SecureBuffer hkdf_sha256(
     
     bool success = false;
     do {
+        /*
+        https://docs.openssl.org/3.5/man3/EVP_PKEY_derive/
+        int EVP_PKEY_derive_init(EVP_PKEY_CTX *ctx);
+        int EVP_PKEY_derive(EVP_PKEY_CTX *ctx, unsigned char *key, size_t *keylen);
+        */
         if (EVP_PKEY_derive_init(ctx) <= 0) break;
+
+        /* 
+        https://docs.openssl.org/3.5/man3/EVP_PKEY_CTX_set_hkdf_md/
+        int EVP_PKEY_CTX_set_hkdf_md(EVP_PKEY_CTX *pctx, const EVP_MD *md); 
+        int EVP_PKEY_CTX_set1_hkdf_salt(EVP_PKEY_CTX *pctx, unsigned char *salt, int saltlen);
+        int EVP_PKEY_CTX_set1_hkdf_key(EVP_PKEY_CTX *pctx, unsigned char *key, int keylen);
+        int EVP_PKEY_CTX_add1_hkdf_info(EVP_PKEY_CTX *pctx, unsigned char *info, int infolen);
+        */
         if (EVP_PKEY_CTX_set_hkdf_md(ctx, EVP_sha256()) <= 0) break;
         if (EVP_PKEY_CTX_set1_hkdf_salt(ctx, 
             reinterpret_cast<const unsigned char*>(salt.data()), 
