@@ -1,0 +1,30 @@
+{
+  "name": "atm-ui-backend",
+  "version": "1.0.0",
+  "description": "Local backend for the Secure ATM web UI – spawns the atm CLI binary and serves the React SPA.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test": "jest --runInBand",
+    "test:unit": "jest --runInBand --testPathPattern=tests/unit",
+    "test:e2e": "jest --runInBand --testPathPattern=tests/e2e"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "testMatch": ["**/tests/**/*.test.js"],
+    "collectCoverageFrom": ["*.js", "!node_modules/**"]
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.5.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "devDependencies": {
+    "jest": "^30.3.0",
+    "supertest": "^7.2.2"
+  }
+}

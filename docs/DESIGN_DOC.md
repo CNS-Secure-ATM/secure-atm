@@ -301,6 +301,43 @@ Dependencies: C++17 compiler (g++), OpenSSL (`libssl-dev`), pthreads - all avail
 
 ---
 
-## 8. Summary
+## 8. ATM Web UI
+
+An optional browser-based interface is provided in `ui/`. It consists of:
+
+- **React + Vite SPA** (`ui/frontend/`): A single-page form for account operations (create, deposit, withdraw, balance). Communicates only with the local backend.
+- **Node.js + Express backend** (`ui/backend/`): Receives validated JSON from the SPA, builds an argv array, and spawns the existing `atm` binary using `child_process.spawn()`. Returns `atm`'s JSON output to the SPA.
+
+### Architecture
+
+```
+Browser (React SPA)
+      │
+      │  POST /api/transaction (JSON)
+      ▼
+Node.js backend ──spawn(atm, argv[])──▶ atm binary ──TCP──▶ bank server
+      │                                    │
+      │                            reads/writes auth file, *.card
+      ◀── JSON result ─────────────────────
+```
+
+### Security properties
+
+The web UI does **not** weaken the existing security model:
+
+| Concern | Mitigation |
+|---|---|
+| **Secrets in browser** | Auth file and card files are never transmitted to the client. The backend passes their filesystem paths to the `atm` binary; the binary reads them itself. |
+| **Command injection** | `spawn(atm, argv[])` is used — no shell. Each argument is a discrete element. The backend validates all fields (account regex, amount format, operation allowlist, IP/port range) before building argv. |
+| **Path traversal** | The card file path is derived server-side: `CARD_DIR + '/' + basename(account) + '.card'`. The client never supplies a file path. |
+| **Network exposure** | The backend binds to `127.0.0.1` only; it is not reachable from other machines. |
+
+### What is unchanged
+
+The `atm` and `bank` C++ binaries, their protocol, cryptography, and build system are entirely unchanged. The web UI is an additive layer that simply invokes `atm` as a subprocess the same way a user would from a terminal.
+
+---
+
+## 9. Summary
 
 The design uses symmetric-only crypto anchored on a pre-shared 256-bit secret. HKDF derives domain-separated keys. AES-256-GCM provides confidentiality and integrity. An HMAC-based challenge-response authenticates card possession without sending secrets over the wire. Sequence numbers, timestamps, and a fresh random CHALLENGE per session prevent replay and reordering. The bank never crashes, commits atomically, and times out all connections at 10 seconds. The whole thing compiles with `make` from source on an offline machine.
