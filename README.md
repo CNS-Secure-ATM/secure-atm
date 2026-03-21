@@ -11,10 +11,40 @@ A secure client-server ATM simulation implementing encrypted communication with 
 
 The source code lives in the `build/` directory.
 
-## Web UI Deployment Docs
+## Web UI
 
-- UI usage and GitHub Pages + local backend steps: `ui/README.md`
-- Full deployment blueprint: `DEPLOYMENT.md`
+In order to use the web UI for the ATM client, visit [https://guntas-13.github.io/secure-atm/](https://guntas-13.github.io/secure-atm/), which is hosted on GitHub Pages. The frontend will send API requests to a local backend server running on the same machine, which in turn spawns the `atm` CLI binary to perform operations. Take a look at the [ui/README.md](ui/README.md) and [ui/DEPLOYMENT.md](ui/DEPLOYMENT.md) for deployment instructions else follow the quick steps:
+
+```bash
+# Clone the repository
+git clone https://github.com/guntas-13/secure-atm.git
+
+# Build the C++ bank and atm binaries (we need only the atm binary for the UI)
+cd secure-atm/build
+make
+
+# Start the bank server in one terminal (if not already running at some other remote)
+./bank
+
+
+# OPTIONAL STEP - skip if you are following the above steps as is
+# Edit .env file under ui/backend/ to set ATM_BIN path and bank server IP/port if needed
+# BANK_HOST=    # Bank server IP (default: 127.0.0.1)
+# BANK_PORT=    # Bank server port (default: 3000)
+# BUILD_DIR=../../build
+# AUTH_FILE=    # Path to the bank auth file (default: ../../build/bank.auth)
+# CARD_DIR=     # Path to the directory containing the card files (default: ../../build)
+# ATM_BIN=      # Path to the atm binary (default: ../../build/atm)
+cd secure-atm/ui/backend
+cp .env.example .env
+
+# Install dependencies and start the backend server
+npm i
+npm start
+
+# Open the frontend in the browser
+# https://guntas-13.github.io/secure-atm/
+```
 
 ## Project Structure
 
