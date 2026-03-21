@@ -432,6 +432,13 @@ int main(int argc, char* argv[])
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;
     sigaction(SIGTERM, &sa, nullptr);
+
+    // Ignore SIGPIPE so failed sends don't terminate the process
+    struct sigaction sa_pipe;
+    sa_pipe.sa_handler = SIG_IGN;
+    sigemptyset(&sa_pipe.sa_mask);
+    sa_pipe.sa_flags = 0;
+    sigaction(SIGPIPE, &sa_pipe, nullptr);
     
     // Create socket
     g_listen_fd = socket(AF_INET, SOCK_STREAM, 0);

@@ -156,7 +156,7 @@ constexpr size_t TIMESTAMP_SIZE = 8;     // uint64
 constexpr size_t LENGTH_PREFIX_SIZE = 4; // uint32
 
 constexpr uint32_t MAX_MESSAGE_SIZE = 8192; // 8KB max message
-constexpr int TIMEOUT_SECONDS = 10;
+constexpr int TIMEOUT_SECONDS = 3;
 constexpr int64_t TIMESTAMP_WINDOW = 30;    // +-30 seconds
 
 } // namespace secure

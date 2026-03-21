@@ -56,6 +56,9 @@ target_link_libraries(test_crypto common ${OPENSSL_LIBRARIES})
 add_executable(test_protocol tests/test_protocol.cpp)
 target_link_libraries(test_protocol common ${OPENSSL_LIBRARIES})
 
+# DoS
+add_executable(dos_attack tests/dos_attack.cpp)
+
 # Register tests with CTest
 add_test(NAME validator_tests COMMAND test_validator)
 add_test(NAME crypto_tests COMMAND test_crypto)

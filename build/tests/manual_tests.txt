@@ -163,6 +163,22 @@ for i in {1..10}; do ./atm -p 4000 -s test.auth -a stresstest -d 1.00; done
 for i in {1..10}; do ./atm -p 4000 -s test.auth -a stresstest -g; done
 
 --------------------------------------------------------------------------------
+TOY DOS DEMO (LOCAL ONLY)
+--------------------------------------------------------------------------------
+
+# Build the demo tool
+make
+
+# Connection flood (rapid connect/close)
+./_build/dos_attack --mode connect --ip 127.0.0.1 --port 4000 --duration 5 --rate 10
+
+# Hold many open connections (slowloris-like)
+./_build/dos_attack --mode hold --ip 127.0.0.1 --port 4000 --connections 100 --duration 10
+
+# Send garbage data on many connections
+./_build/dos_attack --mode garbage --ip 127.0.0.1 --port 4000 --connections 50 --rate 5
+
+--------------------------------------------------------------------------------
 CLEANUP
 --------------------------------------------------------------------------------
 
