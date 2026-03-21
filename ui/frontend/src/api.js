@@ -1,7 +1,15 @@
-const API_BASE = (import.meta.env.VITE_LOCAL_API_BASE || "").replace(
+const configuredApiBase = (import.meta.env.VITE_LOCAL_API_BASE || "").replace(
   /\/+$/,
   "",
 );
+
+const defaultHostedApiBase =
+  typeof window !== "undefined" &&
+  window.location.hostname.endsWith("github.io")
+    ? "http://127.0.0.1:4000"
+    : "";
+
+const API_BASE = configuredApiBase || defaultHostedApiBase;
 
 function apiUrl(path) {
   return `${API_BASE}${path}`;

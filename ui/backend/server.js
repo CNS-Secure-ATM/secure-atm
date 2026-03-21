@@ -13,10 +13,18 @@ const { runAtm } = require("./runAtm");
 const app = express();
 const accountHistory = new Map();
 const MAX_HISTORY_PER_ACCOUNT = 100;
-const allowedOrigins = String(process.env.CORS_ALLOWED_ORIGINS || "")
+const configuredOrigins = String(process.env.CORS_ALLOWED_ORIGINS || "")
   .split(",")
   .map((origin) => origin.trim())
   .filter(Boolean);
+const allowedOrigins =
+  configuredOrigins.length > 0
+    ? configuredOrigins
+    : [
+        "https://guntas-13.github.io",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+      ];
 
 function appendHistoryEntry(account, entry) {
   const current = accountHistory.get(account) || [];
@@ -37,15 +45,12 @@ app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (!origin) return next();
 
-  // If no allowlist is configured, do not add CORS headers.
-  // Same-origin and local proxy setups keep working.
-  if (allowedOrigins.length === 0) return next();
-
   if (allowedOrigins.includes(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Vary", "Origin");
     res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    res.setHeader("Access-Control-Allow-Private-Network", "true");
     if (req.method === "OPTIONS") {
       return res.status(204).end();
     }
