@@ -1,9 +1,9 @@
-'use strict';
+"use strict";
 
-const { spawn } = require('child_process');
-const path = require('path');
-const config = require('./config');
-const log = require('./logger');
+const { spawn } = require("child_process");
+const path = require("path");
+const config = require("./config");
+const log = require("./logger");
 
 const EXIT_SUCCESS = 0;
 const EXIT_PROTOCOL_ERROR = 63;
@@ -22,7 +22,15 @@ const EXIT_OTHER_ERROR = 255;
  */
 function runAtm(params) {
   return new Promise((resolve) => {
-    const { account, operation, amount, bankHost, bankPort } = params;
+    const {
+      account,
+      operation,
+      amount,
+      bankHost,
+      bankPort,
+      cardSecret,
+      createWithSecret,
+    } = params;
 
     const host = bankHost || config.bankHost;
     const port = String(bankPort || config.bankPort);
@@ -35,43 +43,67 @@ function runAtm(params) {
 
     // Warn if auth file sits outside cardDir – the ATM will not find it.
     if (config.authFile !== path.join(cwd, authBasename)) {
-      log.warn('auth file not in CARD_DIR – ATM may fail', {
+      log.warn("auth file not in CARD_DIR – ATM may fail", {
         authFile: config.authFile,
         cardDir: cwd,
       });
     }
 
-    const argv = [
-      '-s', authBasename,
-      '-i', host,
-      '-p', port,
-      '-a', account,
-      '-c', cardBasename,
-    ];
+    const argv = ["-s", authBasename, "-i", host, "-p", port, "-a", account];
 
-    switch (operation) {
-      case 'create':   argv.push('-n', amount); break;
-      case 'deposit':  argv.push('-d', amount); break;
-      case 'withdraw': argv.push('-w', amount); break;
-      case 'balance':  argv.push('-g');         break;
-      default:
-        log.error('unknown operation', { operation });
-        return resolve({ ok: false, exitCode: EXIT_OTHER_ERROR, message: 'Unknown operation' });
+    const normalizedCardSecret =
+      typeof cardSecret === "string" ? cardSecret.trim() : "";
+    const useCreateWithSecret =
+      operation === "create" && createWithSecret === true;
+
+    if (useCreateWithSecret) {
+      // In create-with-secret mode, ATM emits card secret in JSON and does not use card files.
+    } else if (normalizedCardSecret) {
+      argv.push("-C", normalizedCardSecret);
+    } else {
+      argv.push("-c", cardBasename);
     }
 
-    let stdout = '';
-    let stderr = '';
+    switch (operation) {
+      case "create":
+        argv.push("-n", amount);
+        if (useCreateWithSecret) argv.push("-m");
+        break;
+      case "deposit":
+        argv.push("-d", amount);
+        break;
+      case "withdraw":
+        argv.push("-w", amount);
+        break;
+      case "balance":
+        argv.push("-g");
+        break;
+      default:
+        log.error("unknown operation", { operation });
+        return resolve({
+          ok: false,
+          exitCode: EXIT_OTHER_ERROR,
+          message: "Unknown operation",
+        });
+    }
+
+    let stdout = "";
+    let stderr = "";
 
     const child = spawn(config.atmBin, argv, {
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ["ignore", "pipe", "pipe"],
       cwd,
     });
 
-    child.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
-    child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
 
-    child.on('error', (err) => {
-      log.error('atm launch failed', { account, operation, err: err.message });
+    child.on("error", (err) => {
+      log.error("atm launch failed", { account, operation, err: err.message });
       resolve({
         ok: false,
         exitCode: EXIT_OTHER_ERROR,
@@ -79,9 +111,9 @@ function runAtm(params) {
       });
     });
 
-    child.on('close', (code) => {
+    child.on("close", (code) => {
       if (stderr.trim()) {
-        log.warn('atm stderr', { account, operation, output: stderr.trim() });
+        log.warn("atm stderr", { account, operation, output: stderr.trim() });
       }
 
       if (code === EXIT_SUCCESS) {
@@ -90,16 +122,21 @@ function runAtm(params) {
           const data = JSON.parse(line);
           return resolve({ ok: true, data });
         } catch {
-          log.error('atm produced non-JSON output', { account, operation, stdout: line });
+          log.error("atm produced non-JSON output", {
+            account,
+            operation,
+            stdout: line,
+          });
           return resolve({
             ok: false,
             exitCode: EXIT_OTHER_ERROR,
-            message: 'atm produced non-JSON output',
+            message: "atm produced non-JSON output",
           });
         }
       }
 
-      const message = code === EXIT_PROTOCOL_ERROR ? 'protocol_error' : 'transaction_failed';
+      const message =
+        code === EXIT_PROTOCOL_ERROR ? "protocol_error" : "transaction_failed";
       resolve({ ok: false, exitCode: code, message });
     });
   });

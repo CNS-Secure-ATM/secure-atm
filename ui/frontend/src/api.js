@@ -11,9 +11,9 @@
  */
 export async function postTransaction(params) {
   try {
-    const res = await fetch('/api/transaction', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+    const res = await fetch("/api/transaction", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(params),
     });
     return res.json();
@@ -21,7 +21,7 @@ export async function postTransaction(params) {
     return {
       ok: false,
       networkError: true,
-      message: 'Cannot reach the backend server. Make sure it is running.',
+      message: "Cannot reach the backend server. Make sure it is running.",
     };
   }
 }
@@ -32,7 +32,7 @@ export async function postTransaction(params) {
  */
 export async function fetchAccounts() {
   try {
-    const res = await fetch('/api/accounts');
+    const res = await fetch("/api/accounts");
     const json = await res.json();
     return json.accounts ?? [];
   } catch {
@@ -46,9 +46,24 @@ export async function fetchAccounts() {
  */
 export async function fetchHealth() {
   try {
-    const res = await fetch('/api/health');
+    const res = await fetch("/api/health");
     return res.json();
   } catch {
     return { ok: false, networkError: true };
+  }
+}
+
+/**
+ * Fetch transaction history for one account.
+ * @param {string} account
+ * @returns {Promise<{ok: boolean, account?: string, history?: Array<object>, message?: string}>}
+ */
+export async function fetchHistory(account) {
+  try {
+    const params = new URLSearchParams({ account });
+    const res = await fetch(`/api/history?${params.toString()}`);
+    return res.json();
+  } catch {
+    return { ok: false, message: "Cannot reach backend." };
   }
 }
