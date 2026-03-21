@@ -6,6 +6,8 @@
 #include <string>
 #include <unordered_map>
 #include <mutex>
+#include <thread>
+#include <atomic>
 #include <csignal>
 #include <cstring>
 #include <unistd.h>
@@ -28,6 +30,7 @@ using json = nlohmann::json;
 // Global state
 static volatile sig_atomic_t g_running = 1;
 static int g_listen_fd = -1;
+static std::atomic<int> g_active_clients{0};
 
 // Account ledger (thread-safe)
 static std::unordered_map<std::string, uint64_t> g_accounts;
@@ -485,8 +488,18 @@ int main(int argc, char* argv[])
             if (!g_running) break;  // SIGTERM received
             continue;  // Accept error, continue
         }
-        
-        handle_client(client_fd, keys);
+
+        if (g_active_clients.load() >= secure::MAX_ACTIVE_CLIENTS) 
+        {
+            close(client_fd);
+            continue;
+        }
+
+        g_active_clients.fetch_add(1);
+        std::thread([client_fd, &keys]() {
+            handle_client(client_fd, keys);
+            g_active_clients.fetch_sub(1);
+        }).detach();
     }
     
     if (g_listen_fd >= 0) 

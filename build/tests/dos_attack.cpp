@@ -1,4 +1,4 @@
-// Simple DoS demo tool (toy/local use only)
+// DoS Attacker
 // Modes:
 //   connect: rapid connect/close
 //     - duration: total time to keep attempting connects
