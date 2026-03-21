@@ -17,14 +17,14 @@ In order to use the web UI for the ATM client, visit [https://guntas-13.github.i
 
 ```bash
 # Clone the repository
-git clone https://github.com/guntas-13/secure-atm.git
+$ git clone https://github.com/guntas-13/secure-atm.git
 
 # Build the C++ bank and atm binaries (we need only the atm binary for the UI)
-cd secure-atm/build
-make
+$ cd secure-atm/build
+$ make
 
 # Start the bank server in one terminal (if not already running at some other remote)
-./bank
+$ ./bank
 
 
 # OPTIONAL STEP - skip if you are following the above steps as is
@@ -35,12 +35,12 @@ make
 # AUTH_FILE=    # Path to the bank auth file (default: ../../build/bank.auth)
 # CARD_DIR=     # Path to the directory containing the card files (default: ../../build)
 # ATM_BIN=      # Path to the atm binary (default: ../../build/atm)
-cd secure-atm/ui/backend
-cp .env.example .env
+$ cd secure-atm/ui/backend
+$ cp .env.example .env
 
 # Install dependencies and start the backend server
-npm i
-npm start
+$ npm i
+$ npm start
 
 # Open the frontend in the browser
 # https://guntas-13.github.io/secure-atm/
