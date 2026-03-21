@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:gh-pages": "VITE_BASE_PATH=/secure-atm/ VITE_LOCAL_API_BASE=http://127.0.0.1:4000 vite build",
     "preview": "vite preview"
   },
   "dependencies": {

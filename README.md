@@ -11,6 +11,11 @@ A secure client-server ATM simulation implementing encrypted communication with 
 
 The source code lives in the `build/` directory.
 
+## Web UI Deployment Docs
+
+- UI usage and GitHub Pages + local backend steps: `ui/README.md`
+- Full deployment blueprint: `DEPLOYMENT.md`
+
 ## Project Structure
 
 ```

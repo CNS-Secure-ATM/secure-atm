@@ -1,3 +1,12 @@
+const API_BASE = (import.meta.env.VITE_LOCAL_API_BASE || "").replace(
+  /\/+$/,
+  "",
+);
+
+function apiUrl(path) {
+  return `${API_BASE}${path}`;
+}
+
 /**
  * Post a transaction to the backend API.
  *
@@ -11,7 +20,7 @@
  */
 export async function postTransaction(params) {
   try {
-    const res = await fetch("/api/transaction", {
+    const res = await fetch(apiUrl("/api/transaction"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(params),
@@ -32,7 +41,7 @@ export async function postTransaction(params) {
  */
 export async function fetchAccounts() {
   try {
-    const res = await fetch("/api/accounts");
+    const res = await fetch(apiUrl("/api/accounts"));
     const json = await res.json();
     return json.accounts ?? [];
   } catch {
@@ -46,7 +55,7 @@ export async function fetchAccounts() {
  */
 export async function fetchHealth() {
   try {
-    const res = await fetch("/api/health");
+    const res = await fetch(apiUrl("/api/health"));
     return res.json();
   } catch {
     return { ok: false, networkError: true };
@@ -61,7 +70,7 @@ export async function fetchHealth() {
 export async function fetchHistory(account) {
   try {
     const params = new URLSearchParams({ account });
-    const res = await fetch(`/api/history?${params.toString()}`);
+    const res = await fetch(apiUrl(`/api/history?${params.toString()}`));
     return res.json();
   } catch {
     return { ok: false, message: "Cannot reach backend." };

@@ -35,6 +35,57 @@ Node.js backend  ---- spawn(atm, argv) --->  atm binary --- TCP --> bank server
 
 ---
 
+## GitHub Pages deployment (simple model)
+
+Target URL:
+
+- `https://guntas-13.github.io/secure-atm/`
+
+What happens in this model:
+
+1. Frontend is hosted on GitHub Pages.
+2. User opens the public URL in browser.
+3. Browser sends API calls to local backend at `http://127.0.0.1:4000`.
+4. Local backend spawns local `atm` binary.
+5. Local ATM connects to configured bank server IP/port.
+
+### One-time repository setup
+
+1. In GitHub repo settings, open **Pages**.
+2. Set **Build and deployment** source to **GitHub Actions**.
+3. Ensure workflow `.github/workflows/ui-gh-pages.yml` is present on `master`.
+
+### Deploy frontend to Pages
+
+Frontend auto-deploys on push to `master` when files under `ui/frontend/` change.
+
+Manual build command (local verification):
+
+```bash
+cd ui/frontend
+npm install
+npm run build:gh-pages
+```
+
+### Each user must run local backend
+
+On each user machine:
+
+```bash
+cd ui/backend
+cp .env.example .env
+# set ATM_BIN, AUTH_FILE, CARD_DIR, BANK_HOST, BANK_PORT
+# and CORS_ALLOWED_ORIGINS=https://guntas-13.github.io
+npm install
+npm start
+```
+
+Then open:
+
+- `https://guntas-13.github.io/secure-atm/`
+
+---
+
 ## Quick start
 
 ### Run Makefile

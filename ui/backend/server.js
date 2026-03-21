@@ -13,6 +13,10 @@ const { runAtm } = require("./runAtm");
 const app = express();
 const accountHistory = new Map();
 const MAX_HISTORY_PER_ACCOUNT = 100;
+const allowedOrigins = String(process.env.CORS_ALLOWED_ORIGINS || "")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
 
 function appendHistoryEntry(account, entry) {
   const current = accountHistory.get(account) || [];
@@ -25,6 +29,34 @@ function appendHistoryEntry(account, entry) {
 
 // ── Body parser ───────────────────────────────────────────────────────────────
 app.use(express.json({ limit: "16kb" }));
+
+// ── CORS allowlist (optional) ───────────────────────────────────────────────
+// Set CORS_ALLOWED_ORIGINS to a comma-separated list for cross-origin browser usage,
+// e.g. "https://guntas-13.github.io".
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (!origin) return next();
+
+  // If no allowlist is configured, do not add CORS headers.
+  // Same-origin and local proxy setups keep working.
+  if (allowedOrigins.length === 0) return next();
+
+  if (allowedOrigins.includes(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin");
+    res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    if (req.method === "OPTIONS") {
+      return res.status(204).end();
+    }
+    return next();
+  }
+
+  if (req.method === "OPTIONS") {
+    return res.status(403).end();
+  }
+  return res.status(403).json({ ok: false, message: "Origin not allowed" });
+});
 
 // ── Rate limiter ──────────────────────────────────────────────────────────────
 const txLimiter = rateLimit({
