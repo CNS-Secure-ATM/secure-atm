@@ -13,3 +13,4 @@ local_build/
 **/*.card
 **/ui/backend/.env
 **/node_modules/
+**/*.mov
