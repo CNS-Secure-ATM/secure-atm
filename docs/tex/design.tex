@@ -67,7 +67,7 @@
 \begin{document}
 
 \hypertarget{secure-atm---design-document---group-13}{%
-\section{Secure ATM - Design Document - Group
+\section{Secure ATM - Final Design Document - Group
 13}\label{secure-atm---design-document---group-13}}
 
 \begin{longtable}[]{@{}lll@{}}
@@ -159,7 +159,7 @@ BANK (server)                                ATM (client)
     |  4. Print "created\n" to stdout            |     amount format, file names, port range)
     |  5. Derive K_ENC, K_MAC, K_CARD via HKDF   |  3. Read auth file -> derive K_ENC,
     |  6. Create TCP socket                      |     K_MAC, K_CARD via HKDF
-    |  7. setsockopt(SO_REUSEADDR)               |  4. Read card file (if not -n mode)
+    |  7. setsockopt(SO_REUSEADDR)               |  4. Read card file or direct card content (if not -n mode)
     |  8. bind(0.0.0.0, port)                    |
     |  9. listen(backlog)                        |
     |  10. Accept loop begins                    |
@@ -169,7 +169,7 @@ BANK (server)                                ATM (client)
     |     |<-------- ACK ----------------------- |
     |     |                                      |
     |     |  accept() returns new socket fd      |  Connection established
-    |     |  Set SO_RCVTIMEO = 10 seconds        |  Set SO_RCVTIMEO = 10 seconds
+    |     |  Set SO_RCVTIMEO = 3 seconds         |  Set SO_RCVTIMEO = 3 seconds
     |     |                                      |
     |     |  ... encrypted protocol begins ...   |
 \end{verbatim}
@@ -182,8 +182,9 @@ and the ATM exits with code 63.
 
 \textbf{One connection per invocation:} Each ATM process opens exactly
 one TCP connection, performs one transaction (3 encrypted messages), and
-exits. The bank's accept loop handles connections sequentially - one at
-a time, with a 10-second timeout per connection.
+exits. The bank uses a thread-per-client accept loop with a hard
+connection cap (\texttt{MAX\_ACTIVE\_CLIENTS = 60}). Every connection is
+subject to a 3-second socket timeout.
 
 \newpage
 \hypertarget{transaction-flow-3-messages}{%
@@ -272,7 +273,7 @@ Specific failure points:
   This is a fundamental limitation without two-phase commit, and the
   spec accepts it.
 \item
-  \textbf{10-second timeout} applies to every connection. Prevents
+  \textbf{3-second timeout} applies to every connection. Prevents
   slowloris, hanging connections, and resource exhaustion.
 \item
   \textbf{Message size cap} (\textasciitilde8 KB). Any length prefix
@@ -330,7 +331,8 @@ Alice}. \\
 file. \\
 \textbf{Timing attacks} & All MAC comparisons use
 \texttt{CRYPTO\_memcmp()} (constant-time). \\
-\textbf{DoS (connection flood)} & 10-second hard timeout per connection.
+\textbf{DoS (connection flood)} & 3-second hard timeout per connection,
+thread-per-client handling, and a hard cap of 60 active connections.
 Garbage data fails fast at GCM verification
 (\textasciitilde microseconds). Bank never crashes. \\
 \textbf{Memory exhaustion} & Max message size enforced before buffer
@@ -388,6 +390,7 @@ ATM                                         BANK
  |                                           |
  |  CARD_SECRET = HMAC(K_CARD, "bob")        |
  |  Write CARD_SECRET to bob.card            |
+ |  (or print to stdout with \texttt{-m})     |
  |  (card file never sent to bank)           |
 \end{verbatim}
 
@@ -400,8 +403,8 @@ Challenge-Response:}
 
 \begin{verbatim}
 ATM                                         BANK
- |                                           |
  |  Read CARD_SECRET from bob.card           |
+ |  (or pass card content with \texttt{-C})  |
  |                                           |
  |<--- Encrypted { CHALLENGE: R_B } -------- |  R_B = 32 random bytes (CSPRNG)
  |                                           |
@@ -529,23 +532,21 @@ Networking}\label{jinil-patel-22110184---protocol-networking}}
 \item
   Sequence number tracking (per-direction monotonic counter)
 \item
-  Timestamp generation and ±30s validation
+  Timestamp generation and 30s validation
 \item
-  10-second timeout management via \texttt{setsockopt(SO\_RCVTIMEO)}
+  3-second timeout management via \texttt{setsockopt(SO\_RCVTIMEO)}
 \item
   Message size cap enforcement
 \item
   SIGTERM signal handler (bank graceful shutdown)
 \end{itemize}
 
-\textbf{Files:} \texttt{protocol/message.\{hpp,cpp\}},
-\texttt{protocol/framing.\{hpp,cpp\}},
-\texttt{protocol/session.\{hpp,cpp\}},
-\texttt{protocol/timeout.\{hpp,cpp\}}, \texttt{bank/server.\{hpp,cpp\}},
-\texttt{atm/client.\{hpp,cpp\}}
+\textbf{Files:} \texttt{protocol/framing.\{hpp,cpp\}},
+\texttt{protocol/session.\{hpp,cpp\}}
 
 \hypertarget{bhavik-patel-22110047---bank-server-business-logic}{%
-\subsubsection{Bhavik Patel (22110047) - Bank Server (Business
+\subsubsection{Bhavik Patel (22110047) - ATM Client (Business Logic)
+\& Bank Server + UI Framework (Business
 Logic)}\label{bhavik-patel-22110047---bank-server-business-logic}}
 
 \begin{itemize}
@@ -557,6 +558,9 @@ Logic)}\label{bhavik-patel-22110047---bank-server-business-logic}}
   Account ledger:
   \texttt{std::unordered\_map\textless{}std::string,\ uint64\_t\textgreater{}}
   protected by \texttt{std::mutex}
+\item
+  Thread-per-client handling with connection cap
+  (\texttt{MAX\_ACTIVE\_CLIENTS = 60})
 \item
   Per-connection handler: decrypt request -\textgreater{} verify
   CARD\_PROOF -\textgreater{} dispatch operation
@@ -572,22 +576,67 @@ Logic)}\label{bhavik-patel-22110047---bank-server-business-logic}}
   All error paths -\textgreater{}
   \texttt{"protocol\_error\textbackslash{}n"}, close connection,
   continue serving
+\item
+  ATM \texttt{main.cpp}: CLI parsing (POSIX/getopt), mode dispatch
+  (-n/-d/-w/-g, \texttt{-m}, \texttt{-C}, \texttt{--help})
+\item
+  Card file I/O: create (write HMAC secret or \texttt{-m} to stdout),
+  read (parse secret or \texttt{-C} direct content)
+\item
+  Transaction execution: connect -\textgreater{} receive \texttt{CHALLENGE}
+  -\textgreater{} compute CARD\_PROOF -\textgreater{} send request
+  -\textgreater{} receive response -\textgreater{} print JSON
+\item Laid the groundwork for the UI integration (see \texttt{ui/backend/}) - a local Node.js/Express server that spawns \texttt{atm} processes on demand, never exposing secrets to the browser.
 \end{itemize}
 
-\textbf{Files:} \texttt{bank/main.cpp},
-\texttt{bank/handler.\{hpp,cpp\}}, \texttt{bank/ledger.\{hpp,cpp\}},
-\texttt{bank/authfile.\{hpp,cpp\}}
+\textbf{Files:} \texttt{build/src/atm/main.cpp},\texttt{build/src/bank/main.cpp}, \texttt{build/include/common/exitcodes.hpp},
+\texttt{build/include/common/types.hpp}, \texttt{ui/backend/}, \texttt{ui/frontend/}
 
-\hypertarget{rishabh-jogani-23110276---atm-client-business-logic-input-validation}{%
-\subsubsection{Rishabh Jogani (23110276) - ATM Client (Business Logic)
-\& Input
-Validation}\label{rishabh-jogani-23110276---atm-client-business-logic-input-validation}}
+\hypertarget{ui-frontend-backend}{%
+\subsubsection{UI Frontend \& Local Backend (Web UI)}}
 
 \begin{itemize}
 \tightlist
 \item
-  ATM \texttt{main.cpp}: CLI parsing (POSIX/getopt), mode dispatch
-  (-n/-d/-w/-g)
+  React + Vite SPA in \texttt{ui/frontend} (hosted publicly)
+\item
+  Node.js/Express backend in \texttt{ui/backend} (runs locally on each user machine)
+\item
+  Backend spawns \texttt{atm} with argv, never exposing auth or card secrets to the browser
+\item
+  Deployment and runtime model documented in \texttt{ui/README.md} and \texttt{ui/DEPLOYMENT.md}
+\end{itemize}
+
+\newpage
+\begin{verbatim}
+Browser (Public SPA)
+      |
+      | HTTPS (static assets)
+      v
+Public Frontend Host (GitHub Pages)
+      |
+      | fetch http://127.0.0.1:4000/api/*
+      v
+Local Node.js Backend (user machine)
+      |
+      | spawn(atm, argv)
+      v
+Local atm binary + local bank.auth + card files
+      |
+      | TCP
+      v
+Remote bank server (public IP:port)
+\end{verbatim}
+
+\textbf{Files:} \texttt{ui/frontend/*}, \texttt{ui/backend/*},
+\texttt{ui/README.md}, \texttt{ui/DEPLOYMENT.md}, \texttt{.github/workflows/ui-gh-pages.yml}
+
+\hypertarget{rishabh-jogani-23110276---atm-client-business-logic-input-validation}{%
+\subsubsection{Rishabh Jogani (23110276) - Input
+Validation}\label{rishabh-jogani-23110276---atm-client-business-logic-input-validation}}
+
+\begin{itemize}
+\tightlist
 \item
   Full input validation: account name regex
   \texttt{{[}\_\textbackslash{}-\textbackslash{}.0-9a-z{]}\{1,122\}},
@@ -598,12 +647,6 @@ Validation}\label{rishabh-jogani-23110276---atm-client-business-logic-input-vali
   (not \texttt{.}/\texttt{..}), IPv4 dotted-decimal, port 1024--65535,
   duplicate flag detection
 \item
-  Card file I/O: create (write HMAC secret), read (parse secret)
-\item
-  Transaction execution: connect -\textgreater{} receive \texttt{CHALLENGE}
-  -\textgreater{} compute CARD\_PROOF -\textgreater{} send request
-  -\textgreater{} receive response -\textgreater{} print JSON
-\item
   JSON output formatting: cents -\textgreater{} correct decimal
   representation, proper precision
 \item
@@ -613,10 +656,9 @@ Validation}\label{rishabh-jogani-23110276---atm-client-business-logic-input-vali
   (validation/business error)
 \end{itemize}
 
-\textbf{Files:} \texttt{atm/main.cpp},
-\texttt{atm/cardfile.\{hpp,cpp\}}, \texttt{atm/authfile.\{hpp,cpp\}},
-\texttt{validator/*.\{hpp,cpp\}}, \texttt{common/exitcodes.hpp},
-\texttt{common/types.hpp}, \texttt{CMakeLists.txt}, \texttt{Makefile}
+\textbf{Files:} \texttt{build/src/validator/validator.cpp},
+\texttt{build/include/validator/validator.hpp},
+\texttt{build/CMakeLists.txt}, \texttt{build/Makefile}
 
 \hypertarget{integration-points}{%
 \subsubsection{Integration Points}\label{integration-points}}
@@ -636,13 +678,35 @@ never touch raw crypto.
 We use CMake with a thin Makefile wrapper so that
 \texttt{cd\ build\ \&\&\ make} works as the spec requires:
 
+\newpage
 \begin{verbatim}
-build/
-|-- CMakeLists.txt          # Finds OpenSSL, builds common lib + atm + bank
-|-- Makefile                # Wrapper: mkdir _build && cmake .. && make
-|-- include/                # Headers (.hpp)
-|   |-- nlohmann/           # Vendored json.hpp
-|-- src/                    # Sources (.cpp)
+secure-atm/
+|-- build/
+|   |-- Makefile            # Build wrapper (run `make` here)
+|   |-- CMakeLists.txt      # CMake build configuration
+|   |-- README.md           # Build/run usage for CLI
+|   |-- include/
+|   |   |-- common/{types,exitcodes}.hpp
+|   |   |-- crypto/{random,keys,aes_gcm,hmac}.hpp
+|   |   |-- protocol/{framing,session}.hpp
+|   |   |-- validator/validator.hpp
+|   |   |-- nlohmann/json.hpp
+|   |-- src/
+|   |   |-- crypto/{random,keys,aes_gcm,hmac}.cpp
+|   |   |-- protocol/{framing,session}.cpp
+|   |   |-- validator/validator.cpp
+|   |   |-- bank/main.cpp
+|   |   |-- atm/main.cpp
+|   |-- tests/
+|       |-- test_framework.hpp
+|       |-- test_validator.cpp
+|       |-- test_crypto.cpp
+|       |-- test_protocol.cpp
+|       |-- test_integration.sh
+|       |-- dos_attack.cpp
+|-- ui/
+    |-- frontend/           # React + Vite SPA (public hosting)
+    |-- backend/            # Local Node.js backend (spawns atm)
 \end{verbatim}
 
 Dependencies: C++17 compiler (g++), OpenSSL (\texttt{libssl-dev}),
@@ -660,7 +724,8 @@ confidentiality and integrity. An HMAC-based challenge-response
 authenticates card possession without sending secrets over the wire.
 Sequence numbers, timestamps, and a fresh random \texttt{CHALLENGE} per session
 prevent replay and reordering. The bank never crashes, commits
-atomically, and times out all connections at 10 seconds. The whole thing
-compiles with \texttt{make} from source on an offline machine.
+atomically, and times out all connections at 3 seconds. A web UI is
+provided via a public frontend with a local backend that spawns \texttt{atm}.
+The whole thing compiles with \texttt{make} from source on an offline machine.
 
 \end{document}

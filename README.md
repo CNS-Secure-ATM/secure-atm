@@ -270,10 +270,3 @@ https://github.com/user-attachments/assets/db7a0606-b8e6-4212-b6db-10fc3a1e0588
 https://github.com/user-attachments/assets/9a5d432f-ce45-44b3-b425-75d75e9033ae
 
 https://github.com/user-attachments/assets/59313d74-0cdf-4008-872f-2ab686b40036
-
-
-
-
-
-
-
