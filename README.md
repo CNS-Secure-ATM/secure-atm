@@ -13,7 +13,7 @@ The source code lives in the `build/` directory.
 
 ## Web UI
 
-In order to use the web UI for the ATM client, visit [https://CNS-Secure-ATM.github.io/secure-atm/](https://CNS-Secure-ATM.github.io/secure-atm/), which is hosted on GitHub Pages. The frontend will send API requests to a local backend server running on the same machine, which in turn spawns the `atm` CLI binary to perform operations. Take a look at the [ui/README.md](ui/README.md) and [ui/DEPLOYMENT.md](ui/DEPLOYMENT.md) for deployment instructions else follow the quick steps:
+In order to use the web UI for the ATM client, visit [https://cns-secure-atm.github.io/secure-atm/](https://cns-secure-atm.github.io/secure-atm/), which is hosted on GitHub Pages. The frontend will send API requests to a local backend server running on the same machine, which in turn spawns the `atm` CLI binary to perform operations. Take a look at the [ui/README.md](ui/README.md) and [ui/DEPLOYMENT.md](ui/DEPLOYMENT.md) for deployment instructions else follow the quick steps:
 
 ```bash
 # Clone the repository
@@ -43,7 +43,7 @@ $ npm i
 $ npm start
 
 # Open the frontend in the browser
-# https://CNS-Secure-ATM.github.io/secure-atm/
+# https://cns-secure-atm.github.io/secure-atm/
 ```
 
 ## Project Structure

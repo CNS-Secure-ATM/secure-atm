@@ -21,7 +21,7 @@ const allowedOrigins =
   configuredOrigins.length > 0
     ? configuredOrigins
     : [
-        "https://CNS-Secure-ATM.github.io/secure-atm",
+        "https://cns-secure-atm.github.io",
         "http://localhost:5173",
         "http://127.0.0.1:5173",
       ];
