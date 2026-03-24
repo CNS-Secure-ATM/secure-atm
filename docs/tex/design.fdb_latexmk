@@ -1,6 +1,6 @@
 # Fdb version 4
-["pdflatex"] 1774117179.05178 "/Users/guntas13/Desktop/JetBrains Projects/secure-atm/docs/tex/design.tex" "design.pdf" "design" 1774117180.01523 0
-  "/Users/guntas13/Desktop/JetBrains Projects/secure-atm/docs/tex/design.tex" 1774117177.59306 28682 8643d67a967cf2d270210d5027e5dac7 ""
+["pdflatex"] 1774342833.56622 "/Users/guntas13/Desktop/JetBrains Projects/secure-atm/docs/tex/design.tex" "design.pdf" "design" 1774342834.26303 0
+  "/Users/guntas13/Desktop/JetBrains Projects/secure-atm/docs/tex/design.tex" 1774342832.77735 28775 0119ff24ddaaf4b3fd1e6842d0b225bc ""
   "/usr/local/texlive/2024/texmf-dist/fonts/enc/dvips/lm/lm-ec.enc" 1254269338 2375 baa924870cfb487815765f9094cf3728 ""
   "/usr/local/texlive/2024/texmf-dist/fonts/enc/dvips/lm/lm-rm.enc" 1202520719 2327 9d6df24f9c4f7368395224341a95523a ""
   "/usr/local/texlive/2024/texmf-dist/fonts/enc/dvips/lm/lm-ts1.enc" 1254269338 3031 6c4d3515bf7115d8518af1c9ab97ca44 ""
@@ -116,8 +116,8 @@
   "/usr/local/texlive/2024/texmf-var/fonts/map/pdftex/updmap/pdftex.map" 1740691369.20511 5467645 128b85b7cde5f5edc5cb7f1dd7ff8736 ""
   "/usr/local/texlive/2024/texmf-var/web2c/pdftex/pdflatex.fmt" 1740691299 8221423 755e8c63f058f7f640ae9d9b6bfc81f6 ""
   "/usr/local/texlive/2024/texmf.cnf" 1710266656 577 e590dabc9e28c5b61546e15f63eebcdf ""
-  "design.aux" 1774117179.69448 14986 dd748e505371de03bd7e2696eb115f8b "pdflatex"
-  "design.tex" 1774117177.59306 28682 8643d67a967cf2d270210d5027e5dac7 ""
+  "design.aux" 1774342834.18477 15016 4278fbb6a8763c26e28501eea8f33709 "pdflatex"
+  "design.tex" 1774342832.77735 28775 0119ff24ddaaf4b3fd1e6842d0b225bc ""
   (generated)
   "design.aux"
   "design.log"
