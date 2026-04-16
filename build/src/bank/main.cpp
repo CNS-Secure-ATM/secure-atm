@@ -146,6 +146,9 @@ void handle_client(int client_fd, const crypto::DerivedKeys& keys)
     // Lock for account operations
     std::lock_guard<std::mutex> lock(g_accounts_mutex);
     
+    // Pending mutation amount - applied only after successful send (rollback on protocol error)
+    uint64_t pending_amount = 0;
+    
     if (operation == "create") {
         // Create account - no card proof needed
         if (!request.contains("amount")) 
@@ -175,8 +178,8 @@ void handle_client(int client_fd, const crypto::DerivedKeys& keys)
             return;
         }
         
-        // Create account
-        g_accounts[account] = *cents;
+        // Defer account creation until after successful send
+        pending_amount = *cents;
         response["status"] = "success";
         response["initial_balance"] = static_cast<double>(*cents) / 100.0;
         success = true;
@@ -252,7 +255,7 @@ void handle_client(int client_fd, const crypto::DerivedKeys& keys)
                 return;
             }
             
-            it->second += *cents;
+            pending_amount = *cents;
             response["status"] = "success";
             response["deposit"] = static_cast<double>(*cents) / 100.0;
             success = true;
@@ -286,7 +289,7 @@ void handle_client(int client_fd, const crypto::DerivedKeys& keys)
                 return;
             }
             
-            it->second -= *cents;
+            pending_amount = *cents;
             response["status"] = "success";
             response["withdraw"] = static_cast<double>(*cents) / 100.0;
             success = true;
@@ -315,6 +318,17 @@ void handle_client(int client_fd, const crypto::DerivedKeys& keys)
     }
     
     close(client_fd);
+    
+    // Commit the transaction only after successful send
+    if (success && pending_amount > 0) {
+        if (operation == "create") {
+            g_accounts[account] = pending_amount;
+        } else if (operation == "deposit") {
+            g_accounts[account] += pending_amount;
+        } else if (operation == "withdraw") {
+            g_accounts[account] -= pending_amount;
+        }
+    }
     
     // Print result on success
     if (success) 
