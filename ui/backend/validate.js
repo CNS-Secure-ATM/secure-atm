@@ -1,18 +1,18 @@
 "use strict";
 
-// Mirror the validation rules of the C++ ATM binary exactly so the backend
-// rejects bad input before even spawning the process.
+// Lightweight input-shape validation for the Express API layer.
+// Business-logic rules (balance limits, account existence, card matching, etc.)
+// are enforced exclusively by the ATM binary — the source of truth.
+// This module only checks types and bounds so runAtm.js never crashes on bad input.
 
-const ACCOUNT_RE = /^[_\-\.0-9a-z]{1,122}$/;
-const AMOUNT_RE = /^(0|[1-9][0-9]*)\.[0-9]{2}$/;
-const IP_RE = /^(\d{1,3}\.){3}\d{1,3}$/;
 const VALID_OPERATIONS = new Set(["create", "deposit", "withdraw", "balance"]);
 
 function validateAccountName(account) {
-  if (typeof account !== "string" || !ACCOUNT_RE.test(account)) {
-    return "Invalid account name (1-122 chars, lowercase alphanum + _ - .)";
-  }
-  if (account === "." || account === "..") {
+  if (
+    typeof account !== "string" ||
+    account.length === 0 ||
+    account.length > 122
+  ) {
     return "Invalid account name";
   }
   return null;
@@ -23,6 +23,10 @@ function validateAccountName(account) {
  * @param {object} body - parsed request body
  */
 function validateTransaction(body) {
+  if (!body || typeof body !== "object") {
+    return "Invalid request body";
+  }
+
   const {
     account,
     operation,
@@ -33,35 +37,29 @@ function validateTransaction(body) {
     createWithSecret,
   } = body;
 
-  // account
+  // account – must be a non-empty string within spec length
   {
     const accountError = validateAccountName(account);
     if (accountError) return accountError;
   }
 
-  // operation
+  // operation – must be one of the known values
   if (typeof operation !== "string" || !VALID_OPERATIONS.has(operation)) {
     return "Invalid operation (must be one of: create, deposit, withdraw, balance)";
   }
 
-  // amount – required for create/deposit/withdraw
+  // amount – required for create/deposit/withdraw, must be a non-empty string
   if (operation !== "balance") {
-    if (typeof amount !== "string" || !AMOUNT_RE.test(amount)) {
-      return "Invalid amount format (expected d.dd, e.g. 100.00)";
-    }
-    const cents = parseCents(amount);
-    if (cents === null) {
-      return "Amount out of range";
-    }
-    if (operation === "create" && cents < 1000) {
-      return "Initial balance must be at least 10.00";
-    }
-    if ((operation === "deposit" || operation === "withdraw") && cents === 0) {
-      return "Amount must be greater than 0.00";
+    if (
+      typeof amount !== "string" ||
+      amount.length === 0 ||
+      amount.length > 20
+    ) {
+      return "Invalid amount";
     }
   }
 
-  // optional cardSecret (for -C mode)
+  // optional cardSecret – must be a non-empty string if provided
   if (cardSecret !== undefined) {
     if (typeof cardSecret !== "string" || cardSecret.trim().length === 0) {
       return "Invalid card secret";
@@ -71,28 +69,25 @@ function validateTransaction(body) {
     }
   }
 
-  // optional createWithSecret (for -m mode)
+  // optional createWithSecret – must be boolean if provided
   if (createWithSecret !== undefined) {
     if (typeof createWithSecret !== "boolean") {
       return "Invalid createWithSecret flag";
     }
-    if (createWithSecret && operation !== "create") {
-      return "createWithSecret is only valid for create operation";
-    }
   }
 
-  // optional bankHost
+  // optional bankHost – must be a string if provided
   if (bankHost !== undefined) {
-    if (typeof bankHost !== "string" || !IP_RE.test(bankHost)) {
-      return "Invalid bank host (must be dotted-decimal IPv4)";
-    }
-    const octets = bankHost.split(".").map(Number);
-    if (octets.some((o) => o < 0 || o > 255)) {
-      return "Invalid bank host (octet out of range)";
+    if (
+      typeof bankHost !== "string" ||
+      bankHost.length === 0 ||
+      bankHost.length > 15
+    ) {
+      return "Invalid bank host";
     }
   }
 
-  // optional bankPort
+  // optional bankPort – must be a number if provided
   if (bankPort !== undefined) {
     const p = Number(bankPort);
     if (!Number.isInteger(p) || p < 1024 || p > 65535) {
@@ -103,19 +98,4 @@ function validateTransaction(body) {
   return null;
 }
 
-/**
- * Parse "123.45" → 12345 (cents as integer).
- * Returns null if conversion fails or value is too large.
- */
-function parseCents(amountStr) {
-  const parts = amountStr.split(".");
-  if (parts.length !== 2 || parts[1].length !== 2) return null;
-  const whole = BigInt(parts[0]);
-  const frac = BigInt(parts[1]);
-  const cents = whole * 100n + frac;
-  // uint64 max is 18446744073709551615; limit to spec's 4294967295.99 (uint32 whole)
-  if (cents > 429496729599n) return null;
-  return Number(cents);
-}
-
-module.exports = { validateTransaction, parseCents, validateAccountName };
+module.exports = { validateTransaction, validateAccountName };
