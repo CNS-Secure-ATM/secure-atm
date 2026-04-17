@@ -175,11 +175,10 @@ void handle_client(int client_fd, const crypto::DerivedKeys& keys)
         // Check account doesn't exist
         if (g_accounts.find(account) != g_accounts.end()) 
         {
-            // Account exists - send fail
+            // Account exists - business logic error, not protocol error
             response["status"] = "fail";
             session.send(response.dump());
             close(client_fd);
-            protocol_error();
             return;
         }
         
@@ -216,8 +215,10 @@ void handle_client(int client_fd, const crypto::DerivedKeys& keys)
         // Verify card proof (constant time)
         if (!crypto::hmac_verify(expected_proof, card_proof)) 
         {
+            // Wrong card - business logic error, not protocol error
+            response["status"] = "fail";
+            session.send(response.dump());
             close(client_fd);
-            protocol_error();
             return;
         }
         
@@ -225,10 +226,10 @@ void handle_client(int client_fd, const crypto::DerivedKeys& keys)
         auto it = g_accounts.find(account);
         if (it == g_accounts.end()) 
         {
+            // Account not found - business logic error, not protocol error
             response["status"] = "fail";
             session.send(response.dump());
             close(client_fd);
-            protocol_error();
             return;
         }
         
@@ -253,10 +254,10 @@ void handle_client(int client_fd, const crypto::DerivedKeys& keys)
             // Check for overflow
             if (it->second > UINT64_MAX - *cents) 
             {
+                // Overflow - business logic error, not protocol error
                 response["status"] = "fail";
                 session.send(response.dump());
                 close(client_fd);
-                protocol_error();
                 return;
             }
             
@@ -287,10 +288,10 @@ void handle_client(int client_fd, const crypto::DerivedKeys& keys)
             // Check sufficient funds
             if (it->second < *cents) 
             {
+                // Insufficient funds - business logic error, not protocol error
                 response["status"] = "fail";
                 session.send(response.dump());
                 close(client_fd);
-                protocol_error();
                 return;
             }
             
