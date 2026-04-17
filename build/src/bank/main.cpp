@@ -118,10 +118,12 @@ void handle_client(int client_fd, const crypto::DerivedKeys& keys)
         return;
     }
     
-    // Validate request structure
-    if (!request.contains("type") || request["type"] != "request" ||
-        !request.contains("operation") || !request.contains("account") ||
-        !request.contains("atm_nonce")) 
+    // Validate request structure and field types
+    if (!request.contains("type") || !request["type"].is_string() ||
+        request["type"] != "request" ||
+        !request.contains("operation") || !request["operation"].is_string() ||
+        !request.contains("account") || !request["account"].is_string() ||
+        !request.contains("atm_nonce") || !request["atm_nonce"].is_string()) 
     {
         close(client_fd);
         protocol_error();
@@ -156,7 +158,7 @@ void handle_client(int client_fd, const crypto::DerivedKeys& keys)
     
     if (operation == "create") {
         // Create account - no card proof needed
-        if (!request.contains("amount")) 
+        if (!request.contains("amount") || !request["amount"].is_string()) 
         {
             close(client_fd);
             protocol_error();
@@ -192,7 +194,7 @@ void handle_client(int client_fd, const crypto::DerivedKeys& keys)
     else if (operation == "deposit" || operation == "withdraw" || operation == "balance") 
     {
         // These require card proof
-        if (!request.contains("card_proof"))
+        if (!request.contains("card_proof") || !request["card_proof"].is_string())
         {
             close(client_fd);
             protocol_error();
@@ -235,7 +237,7 @@ void handle_client(int client_fd, const crypto::DerivedKeys& keys)
         
         if (operation == "deposit") 
         {
-            if (!request.contains("amount")) 
+            if (!request.contains("amount") || !request["amount"].is_string()) 
             {
                 close(client_fd);
                 protocol_error();
@@ -269,7 +271,7 @@ void handle_client(int client_fd, const crypto::DerivedKeys& keys)
         } 
         else if (operation == "withdraw") 
         {
-            if (!request.contains("amount")) 
+            if (!request.contains("amount") || !request["amount"].is_string()) 
             {
                 close(client_fd);
                 protocol_error();
