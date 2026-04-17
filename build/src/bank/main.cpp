@@ -120,7 +120,8 @@ void handle_client(int client_fd, const crypto::DerivedKeys& keys)
     
     // Validate request structure
     if (!request.contains("type") || request["type"] != "request" ||
-        !request.contains("operation") || !request.contains("account")) 
+        !request.contains("operation") || !request.contains("account") ||
+        !request.contains("atm_nonce")) 
     {
         close(client_fd);
         protocol_error();
@@ -129,6 +130,7 @@ void handle_client(int client_fd, const crypto::DerivedKeys& keys)
     
     std::string operation = request["operation"];
     std::string account = request["account"];
+    std::string atm_nonce = request["atm_nonce"];
     
     // Validate account name
     if (!validator::is_valid_account(account)) 
@@ -142,6 +144,9 @@ void handle_client(int client_fd, const crypto::DerivedKeys& keys)
     json response;
     response["type"] = "response";
     response["account"] = account;
+    response["operation"] = operation;
+    response["challenge"] = challenge.to_hex();
+    response["atm_nonce"] = atm_nonce;
     
     // Lock for account operations
     std::lock_guard<std::mutex> lock(g_accounts_mutex);
