@@ -61,6 +61,29 @@ void print_json_result(const json& j)
     std::cout.flush();
 }
 
+// Convert cents (uint64_t) to a lossless JSON number value.
+// Avoids double cast which loses precision above 2^53 cents.
+// Returns a json value that serializes as e.g. 1234.56 or 10.1 or 0.
+json cents_to_json(uint64_t cents) 
+{
+    std::string s = validator::format_cents_to_amount(cents);
+    
+    // Strip trailing zeros after decimal for spec-compliant output
+    // "1000.00" → "1000", "63.10" → "63.1", "43.63" → "43.63"
+    size_t dot = s.find('.');
+    if (dot != std::string::npos) {
+        size_t last = s.find_last_not_of('0');
+        if (last == dot) {
+            s.erase(dot);
+        } else {
+            s.erase(last + 1);
+        }
+    }
+    
+    // Parse as JSON number — avoids double intermediary
+    return json::parse(s);
+}
+
 // Process a single client connection
 void handle_client(int client_fd, const crypto::DerivedKeys& keys) 
 {
@@ -187,7 +210,7 @@ void handle_client(int client_fd, const crypto::DerivedKeys& keys)
         // Defer account creation until after successful send
         pending_amount = *cents;
         response["status"] = "success";
-        response["initial_balance"] = static_cast<double>(*cents) / 100.0;
+        response["initial_balance"] = cents_to_json(*cents);
         success = true;
         
     } 
@@ -265,7 +288,7 @@ void handle_client(int client_fd, const crypto::DerivedKeys& keys)
             
             pending_amount = *cents;
             response["status"] = "success";
-            response["deposit"] = static_cast<double>(*cents) / 100.0;
+            response["deposit"] = cents_to_json(*cents);
             success = true;
             
         } 
@@ -299,14 +322,14 @@ void handle_client(int client_fd, const crypto::DerivedKeys& keys)
             
             pending_amount = *cents;
             response["status"] = "success";
-            response["withdraw"] = static_cast<double>(*cents) / 100.0;
+            response["withdraw"] = cents_to_json(*cents);
             success = true;
             
         } 
         else if (operation == "balance") 
         {
             response["status"] = "success";
-            response["balance"] = static_cast<double>(it->second) / 100.0;
+            response["balance"] = cents_to_json(it->second);
             success = true;
         }
     } 
