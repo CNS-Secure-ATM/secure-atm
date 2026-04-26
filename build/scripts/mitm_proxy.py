@@ -1,16 +1,21 @@
 import socket
 import struct
+import sys
 
-def proxy_mitm():
+def proxy_mitm(listen_port=3001, bank_port=3000):
     proxy_server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     proxy_server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    proxy_server.bind(('127.0.0.1', 3001))
+    proxy_server.bind(('127.0.0.1', listen_port))
     proxy_server.listen(1)
+    print(f'[MITM Proxy] Listening on 127.0.0.1:{listen_port} and waiting for ATM...')
     
     atm_conn, atm_addr = proxy_server.accept()
+    print('[MITM Proxy] ATM connected to proxy.')
     
     bank_conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    bank_conn.connect(('127.0.0.1', 3000))
+    print(f'[MITM Proxy] Connecting to Bank at 127.0.0.1:{bank_port}...')
+    bank_conn.connect(('127.0.0.1', bank_port))
+    print('[MITM Proxy] Connected to Bank.')
         
     # Read Challenge from Bank 
     chal_len_data = bank_conn.recv(4)
@@ -46,4 +51,6 @@ def proxy_mitm():
     proxy_server.close()
 
 if __name__ == '__main__':
-    proxy_mitm()
+    _listen = int(sys.argv[1]) if len(sys.argv) > 1 else 3001
+    _bank   = int(sys.argv[2]) if len(sys.argv) > 2 else 3000
+    proxy_mitm(_listen, _bank)

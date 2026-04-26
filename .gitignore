@@ -9,6 +9,9 @@ local_build/
 **/bankdir/
 **/atm
 **/bank
+**/test_crypto
+**/test_protocol
+**/test_validator
 **/*.auth
 **/*.card
 **/ui/backend/.env
