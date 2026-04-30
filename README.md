@@ -13,7 +13,7 @@ The source code lives in the `build/` directory.
 
 ## Web UI
 
-In order to use the web UI for the ATM client, visit [https://cns-secure-atm.github.io/secure-atm/](https://cns-secure-atm.github.io/secure-atm/), which is hosted on GitHub Pages. The frontend will send API requests to a local backend server running on the same machine, which in turn spawns the `atm` CLI binary to perform operations. Take a look at the [ui/README.md](ui/README.md) and [ui/DEPLOYMENT.md](ui/DEPLOYMENT.md) for deployment instructions else follow the quick steps:
+In order to use the web UI for the ATM client, visit [https://guntas-13.github.io/secure-atm/](https://guntas-13.github.io/secure-atm/), which is hosted on GitHub Pages. The frontend will send API requests to a local backend server running on the same machine, which in turn spawns the `atm` CLI binary to perform operations. Take a look at the [ui/README.md](ui/README.md) and [ui/DEPLOYMENT.md](ui/DEPLOYMENT.md) for deployment instructions else follow the quick steps:
 
 ```bash
 # Clone the repository
@@ -35,15 +35,16 @@ $ ./bank
 # AUTH_FILE=    # Path to the bank auth file (default: ../../build/bank.auth)
 # CARD_DIR=     # Path to the directory containing the card files (default: ../../build)
 # ATM_BIN=      # Path to the atm binary (default: ../../build/atm)
+
 $ cd secure-atm/ui/backend
-$ cp .env.example .env
+# $ cp .env.example .env # optional - the defaults should work if you followed the above steps
 
 # Install dependencies and start the backend server
 $ npm i
 $ npm start
 
 # Open the frontend in the browser
-# https://cns-secure-atm.github.io/secure-atm/
+# https://guntas-13.github.io/secure-atm/
 ```
 
 ## Project Structure
