@@ -14,6 +14,7 @@
 #include "common/exitcodes.hpp"
 #include "crypto/keys.hpp"
 #include "crypto/hmac.hpp"
+#include "crypto/random.hpp"
 #include "protocol/session.hpp"
 #include "protocol/framing.hpp"
 #include "validator/validator.hpp"
@@ -403,10 +404,19 @@ int main(int argc, char* argv[]) {
         return exitcode::PROTOCOL_ERROR;
     }
     
+    // Generate ATM nonce for response-binding
+    auto atm_nonce = crypto::random_bytes(secure::CHALLENGE_SIZE);
+    if (atm_nonce.empty()) {
+        close(sockfd);
+        return exitcode::PROTOCOL_ERROR;
+    }
+    std::string atm_nonce_hex = atm_nonce.to_hex();
+    
     // Build request
     json request;
     request["type"] = "request";
     request["account"] = opts.account;
+    request["atm_nonce"] = atm_nonce_hex;
     
     switch (opts.mode) {
         case Mode::CREATE:
@@ -472,6 +482,32 @@ int main(int argc, char* argv[]) {
     
     if (response["status"] != "success") {
         return exitcode::OTHER_ERROR;
+    }
+    
+    // Verify request-response binding
+    // atm_nonce: ATM-generated nonce echoed by bank — MITM cannot read it from the
+    // encrypted request, so a replayed response will carry a stale/wrong nonce.
+    if (!response.contains("atm_nonce") || response["atm_nonce"] != atm_nonce_hex) {
+        return exitcode::PROTOCOL_ERROR;
+    }
+    if (!response.contains("challenge") || response["challenge"] != challenge_hex) {
+        return exitcode::PROTOCOL_ERROR;
+    }
+    if (!response.contains("account") || response["account"] != opts.account) {
+        return exitcode::PROTOCOL_ERROR;
+    }
+    {
+        std::string expected_op;
+        switch (opts.mode) {
+            case Mode::CREATE:   expected_op = "create";   break;
+            case Mode::DEPOSIT:  expected_op = "deposit";  break;
+            case Mode::WITHDRAW: expected_op = "withdraw"; break;
+            case Mode::BALANCE:  expected_op = "balance";  break;
+            default: return exitcode::PROTOCOL_ERROR;
+        }
+        if (!response.contains("operation") || response["operation"] != expected_op) {
+            return exitcode::PROTOCOL_ERROR;
+        }
     }
     
     // For create mode, create the card file

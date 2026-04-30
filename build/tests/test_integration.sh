@@ -151,17 +151,27 @@ echo "=== Error Handling ==="
 run_test "Duplicate account creation" 255 '' \
     ./atm -p "$PORT" -s "$AUTH_FILE" -a alice -n 100.00
 
+# Insufficient funds: bank sends a "fail" response → ATM returns 255 (OTHER_ERROR).
+# Balance must NOT change because the bank never applied the withdrawal.
 run_test "Insufficient funds" 255 '' \
     ./atm -p "$PORT" -s "$AUTH_FILE" -a charlie -w 200.00
+
+run_test "Charlie balance unchanged after insufficient funds" 0 '"balance":100' \
+    ./atm -p "$PORT" -s "$AUTH_FILE" -a charlie -g
 
 run_test "Non-existent account" 255 '' \
     ./atm -p "$PORT" -s "$AUTH_FILE" -a nonexistent -g
 
-# Wrong card test
+# Wrong card: bank sends a {"status":"fail"} response (HMAC mismatch is a
+# business-logic rejection, not a protocol drop) → ATM parses the response,
+# sees status != "success", and exits 255 (OTHER_ERROR).
 cp alice.card wrong.card
-run_test "Wrong card file" 63 '' \
+run_test "Wrong card file (exit 255)" 255 '' \
     ./atm -p "$PORT" -s "$AUTH_FILE" -a bob -c wrong.card -g
 rm -f wrong.card
+
+run_test "Bob balance unchanged after wrong card access" 0 '"balance":500' \
+    ./atm -p "$PORT" -s "$AUTH_FILE" -a bob -g
 
 # ============================================================================
 # Input validation tests
@@ -201,6 +211,72 @@ run_test "Minimum deposit (0.01)" 0 '"deposit":0.01' \
 
 run_test "Create with minimum balance" 0 '"initial_balance":10' \
     ./atm -p "$PORT" -s "$AUTH_FILE" -a minimum -n 10.00
+
+# ============================================================================
+# Rollback & State Integrity
+# Verifies the deferred-mutation fix: the bank only commits state changes
+# AFTER a response frame is successfully sent.  If the send fails (protocol
+# error / connection drop) the ledger must remain unchanged.
+# ============================================================================
+echo ""
+echo "=== Rollback & State Integrity ==="
+
+# -- 1. Auth-failure rollback ------------------------------------------------
+# Use bob's card against alice's account.  Bank sends {"status":"fail"} (HMAC
+# mismatch is a business-logic rejection) → ATM exits 255 (OTHER_ERROR).
+# No balance mutation is staged for wrong-card requests, so alice's ledger
+# entry is never touched.
+cp bob.card alice_wrong.card
+
+run_test "Wrong-card deposit attempt (exit 255)" 255 '' \
+    ./atm -p "$PORT" -s "$AUTH_FILE" -a alice -c alice_wrong.card -d 50.00
+
+run_test "Alice balance unchanged after wrong-card deposit" 0 '"balance":1249.51' \
+    ./atm -p "$PORT" -s "$AUTH_FILE" -a alice -g
+
+run_test "Wrong-card withdrawal attempt (exit 255)" 255 '' \
+    ./atm -p "$PORT" -s "$AUTH_FILE" -a alice -c alice_wrong.card -w 50.00
+
+run_test "Alice balance unchanged after wrong-card withdrawal" 0 '"balance":1249.51' \
+    ./atm -p "$PORT" -s "$AUTH_FILE" -a alice -g
+
+rm -f alice_wrong.card
+
+# -- 2. MITM TCP-RST rollback ------------------------------------------------
+# The MITM proxy forwards a valid deposit request to the bank, then force-
+# resets the bank socket before the bank can send its response.
+# Expected behaviour (with the deferred-mutation fix):
+#   - bank's session.send() fails  → handle_client() returns early, no commit
+#   - bank prints "protocol_error"
+#   - ATM's session.recv() fails   → exits 63
+#   - alice's balance stays at 1249.51 (deposit of 50.00 was NOT applied)
+if command -v python3 >/dev/null 2>&1; then
+    MITM_PORT=$((PORT + 1))
+    python3 ./scripts/mitm_proxy.py "$MITM_PORT" "$PORT" >/dev/null 2>&1 &
+    MITM_PID=$!
+    sleep 0.4   # give the proxy time to bind and listen
+
+    set +e
+    ./atm -p "$MITM_PORT" -s "$AUTH_FILE" -a alice -d 50.00 >/dev/null 2>&1
+    MITM_ATM_EXIT=$?
+    set -e
+    wait "$MITM_PID" 2>/dev/null || true
+
+    TESTS_RUN=$((TESTS_RUN + 1))
+    printf "Testing: %-40s ... " "MITM deposit: ATM exits 63 (no response)"
+    if [ "$MITM_ATM_EXIT" -eq 63 ]; then
+        echo -e "${GREEN}PASS${NC}"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        echo -e "${RED}FAIL${NC} (exit=$MITM_ATM_EXIT, expected=63)"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+
+    run_test "Alice balance unchanged after MITM-dropped deposit" 0 '"balance":1249.51' \
+        ./atm -p "$PORT" -s "$AUTH_FILE" -a alice -g
+else
+    echo -e "${YELLOW}  Skipping MITM rollback test (python3 not available)${NC}"
+fi
 
 # ============================================================================
 # Summary

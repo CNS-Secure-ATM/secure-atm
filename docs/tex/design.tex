@@ -198,18 +198,22 @@ ATM                                      BANK
  |                                        |  Generate CHALLENGE R_B (32 random bytes)
  |<---- Encrypted { CHALLENGE: R_B } -----|  [Message 1: Bank -> ATM]
  |                                        |
+ |  Generate ATM nonce R_A (32 bytes)     |
  |  Compute CARD_PROOF = HMAC(            |
  |    HMAC(K_CARD, ACCOUNT), R_B)         |
  |                                        |
  |---- Encrypted { operation, ACCOUNT, -->|  [Message 2: ATM -> Bank]
- |      amount, CARD_PROOF }              |
+ |      amount, CARD_PROOF, R_A }         |
  |                                        |  Verify: decrypt -> check HMAC -> check seq#
  |                                        |  -> verify CARD_PROOF -> validate business logic
  |                                        |  -> commit transaction atomically
  |                                        |
- |<---- Encrypted { status, result } -----|  [Message 3: Bank -> ATM]
+ |<---- Encrypted { status, result, ------|  [Message 3: Bank -> ATM]
+ |       R_B, R_A, operation, account }   |
  |                                        |
- |  Print JSON result, exit(0)            |  Print JSON result
+ |  Verify R_A matches own nonce          |  Print JSON result
+ |  Verify R_B, operation, account match  |
+ |  Print JSON result, exit(0)            |
  |---- TCP Close ------------------------>|
 \end{verbatim}
 
@@ -316,7 +320,7 @@ Without K\_MASTER, nothing is readable. \\
 \textbf{Tampering} & GCM's 128-bit auth tag + outer HMAC-SHA256 detect
 any modification. \\
 \textbf{Replay} & Fresh 32-byte random \texttt{CHALLENGE} per session + monotonic
-sequence numbers + timestamp window (±30s). \\
+sequence numbers + timestamp window (±30s). ATM sends its own nonce \texttt{R\_A} inside the encrypted request; bank echoes it in the response. Since the MITM cannot decrypt the request, it cannot replay a response with the correct \texttt{R\_A}. \\
 \textbf{Reorder} & Strict sequence number check: expected = previous +
 1. \\
 \textbf{Injection/Forgery} & Requires \texttt{K\_ENC} and \texttt{K\_MAC} (from auth file)
@@ -398,6 +402,7 @@ The card secret is computed entirely on the ATM side after a successful
 create response. It is never transmitted. If the card file already
 exists, the ATM exits 255 before connecting.
 
+\newpage
 \textbf{Authentication (\texttt{-d}, \texttt{-w}, \texttt{-g} modes) -
 Challenge-Response:}
 
@@ -408,19 +413,25 @@ ATM                                         BANK
  |                                           |
  |<--- Encrypted { CHALLENGE: R_B } -------- |  R_B = 32 random bytes (CSPRNG)
  |                                           |
+ |  Generate R_A (32 random bytes)           |
  |  CARD_PROOF = HMAC(CARD_SECRET, R_B)      |
  |                                           |
  |---- Encrypted { op, "bob", amount, -----> |
- |      CARD_PROOF }                         |
+ |      CARD_PROOF, R_A }                    |
  |                                           |  Bank independently computes:
  |                                           |    EXPECTED_SECRET = HMAC(K_CARD, "bob")
  |                                           |    EXPECTED_PROOF  = HMAC(EXPECTED_SECRET, R_B)
  |                                           |  Verify: CARD_PROOF == EXPECTED_PROOF
  |                                           |    (constant-time via CRYPTO_memcmp)
  |                                           |  Match -> proceed; mismatch -> protocol_error
+ |                                           |
+ |<--- Encrypted { status, result, --------- |  Echo R_A, R_B, operation, account
+ |      R_B, R_A, operation, account }       |  in response
+ |                                           |
+ |  Verify R_A matches own nonce             |
+ |  Verify R_B, operation, account match     |
 \end{verbatim}
 
-\newpage
 \textbf{Why this works:}
 
 \begin{itemize}
@@ -607,7 +618,6 @@ Logic)}\label{bhavik-patel-22110047---bank-server-business-logic}}
   Deployment and runtime model documented in \texttt{ui/README.md} and \texttt{ui/DEPLOYMENT.md}
 \end{itemize}
 
-\newpage
 \begin{verbatim}
 Browser (Public SPA)
       |
@@ -678,7 +688,6 @@ never touch raw crypto.
 We use CMake with a thin Makefile wrapper so that
 \texttt{cd\ build\ \&\&\ make} works as the spec requires:
 
-\newpage
 \begin{verbatim}
 secure-atm/
 |-- build/
@@ -722,7 +731,8 @@ The design uses symmetric-only crypto anchored on a pre-shared 256-bit
 secret. HKDF derives domain-separated keys. AES-256-GCM provides
 confidentiality and integrity. An HMAC-based challenge-response
 authenticates card possession without sending secrets over the wire.
-Sequence numbers, timestamps, and a fresh random \texttt{CHALLENGE} per session
+Sequence numbers, timestamps, a fresh random \texttt{CHALLENGE} per session,
+and an ATM-generated nonce \texttt{R\_A} echoed in the response
 prevent replay and reordering. The bank never crashes, commits
 atomically, and times out all connections at 3 seconds. A web UI is
 provided via a public frontend with a local backend that spawns \texttt{atm}.

@@ -180,6 +180,12 @@ bool is_valid_ipv4(const std::string& ip)
             }
         }
         
+        // Octet can be at most 3 digits (0-255)
+        if (octet_str.size() > 3) 
+        {
+            return false;
+        }
+        
         // Range 0-255
         int val = std::stoi(octet_str);
         if (val < 0 || val > 255) 

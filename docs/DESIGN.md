@@ -683,14 +683,14 @@ After successful decryption and frame verification, the Bank validates the trans
 
 ### 8.2 During Message Exchange
 
-| Property            | How Achieved                                                                  |
-| ------------------- | ----------------------------------------------------------------------------- |
-| **Confidentiality** | AES-256-GCM encryption - all message content is encrypted                     |
-| **Integrity**       | GCM authentication tag (128-bit) + HMAC-SHA256 over entire frame              |
-| **Authentication**  | Symmetric keys derived from shared auth file → implicit mutual authentication |
-| **Anti-Replay**     | Monotonic sequence numbers + per-message random nonce + timestamp window      |
-| **Anti-Reorder**    | Sequence number verified to be exactly previous + 1                           |
-| **Freshness**       | Timestamp within ±30s of receiver's clock; random challenge per session       |
+| Property            | How Achieved                                                                                                                               |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Confidentiality** | AES-256-GCM encryption - all message content is encrypted                                                                                  |
+| **Integrity**       | GCM authentication tag (128-bit) + HMAC-SHA256 over entire frame                                                                           |
+| **Authentication**  | Symmetric keys derived from shared auth file → implicit mutual authentication                                                              |
+| **Anti-Replay**     | Monotonic sequence numbers + per-message random nonce + timestamp window + ATM-generated nonce `R_a` echoed in response (response-binding) |
+| **Anti-Reorder**    | Sequence number verified to be exactly previous + 1                                                                                        |
+| **Freshness**       | Timestamp within ±30s of receiver's clock; random challenge `R_b` per session; ATM verifies its own nonce `R_a` echo in response           |
 
 ### 8.3 Account-Level Operations
 
@@ -915,24 +915,24 @@ Per the spec, the attacker:
 
 ### 11.2 Attack Mitigation Table
 
-| Attack                          | Description                                     | Mitigation                                                                                                                                                                                |
-| ------------------------------- | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Eavesdropping**               | MITM reads transaction details                  | AES-256-GCM encryption provides **confidentiality**; all message content is encrypted with K_enc derived from auth file                                                                   |
-| **Message Tampering**           | MITM modifies ciphertext in transit             | GCM authentication tag (128-bit) + outer HMAC-SHA256 detect any modification; both verify or reject                                                                                       |
-| **Replay Attack**               | MITM records and replays a valid transaction    | Monotonic sequence numbers + per-session random challenge + timestamp window; Bank rejects any seen or out-of-order sequence                                                              |
-| **Reorder Attack**              | MITM reorders messages                          | Strict sequence number checking: expected = previous + 1                                                                                                                                  |
-| **Message Injection**           | MITM crafts and sends arbitrary messages        | Without K_enc and K_mac (derived from auth file), attacker cannot produce valid encrypted+authenticated frames                                                                            |
-| **Session Hijacking**           | MITM takes over an established session          | All messages are authenticated; injecting into an existing session requires K_enc + K_mac + correct sequence number                                                                       |
-| **Impersonation (Bank)**        | Fake bank responds to ATM                       | ATM verifies responses with K_enc/K_mac; fake bank without auth file cannot produce valid responses                                                                                       |
-| **Impersonation (ATM)**         | Fake ATM sends requests to Bank                 | Bank authenticates via encrypted channel (auth file) + card proof (challenge-response); both required                                                                                     |
-| **Cross-Account Access**        | Use Bob's card to access Alice's account        | card_secret = HMAC(K_card, account_name); Bob's secret ≠ Alice's secret; Bank verifies card_proof against the claimed account                                                             |
-| **Card Forgery**                | Create a fake card file                         | Requires K_card (derived from auth file); attacker without auth file cannot compute valid card_secret                                                                                     |
-| **Balance Manipulation**        | Inflate balance or withdraw more than available | All balance state is server-side only; ATM is stateless; Bank enforces `balance >= withdrawal_amount`                                                                                     |
-| **Denial of Service**           | Flood bank with connections                     | Bank handles each connection independently; invalid data triggers `protocol_error` but does NOT crash the server; 10-second timeout prevents hanging connections from resource exhaustion |
-| **Timing Attack**               | Deduce information from response timing         | Use constant-time comparison for HMAC verification (`CRYPTO_memcmp()` from OpenSSL)                                                                                                       |
-| **Overflow/Underflow**          | Malicious amounts cause arithmetic errors       | Store balances in cents as `uint64`; validate all amounts against `[0, 4294967295.99]` range; use checked arithmetic                                                                      |
-| **Auth File Reuse**             | Old auth file used with new bank instance       | Bank refuses to start if auth file exists; each run creates a fresh auth file with new K_master                                                                                           |
-| **Concurrent Transaction Race** | Two ATMs modify same account simultaneously     | Bank uses mutex/lock per account (or serial processing); atomic read-modify-write with mutex held                                                                                         |
+| Attack                          | Description                                     | Mitigation                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| ------------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Eavesdropping**               | MITM reads transaction details                  | AES-256-GCM encryption provides **confidentiality**; all message content is encrypted with K_enc derived from auth file                                                                                                                                                                                                                                                                                                                                |
+| **Message Tampering**           | MITM modifies ciphertext in transit             | GCM authentication tag (128-bit) + outer HMAC-SHA256 detect any modification; both verify or reject                                                                                                                                                                                                                                                                                                                                                    |
+| **Replay Attack**               | MITM records and replays a valid transaction    | Monotonic sequence numbers + per-session random challenge + timestamp window; Bank rejects any seen or out-of-order sequence. ATM includes a fresh random nonce `R_a` in each encrypted request; the bank echoes `R_a` in its response. Since the MITM cannot decrypt the request to learn `R_a`, it cannot replay an old response with the correct nonce — the ATM rejects the mismatch. Additionally, challenge, operation, and account are verified |
+| **Reorder Attack**              | MITM reorders messages                          | Strict sequence number checking: expected = previous + 1                                                                                                                                                                                                                                                                                                                                                                                               |
+| **Message Injection**           | MITM crafts and sends arbitrary messages        | Without K_enc and K_mac (derived from auth file), attacker cannot produce valid encrypted+authenticated frames                                                                                                                                                                                                                                                                                                                                         |
+| **Session Hijacking**           | MITM takes over an established session          | All messages are authenticated; injecting into an existing session requires K_enc + K_mac + correct sequence number                                                                                                                                                                                                                                                                                                                                    |
+| **Impersonation (Bank)**        | Fake bank responds to ATM                       | ATM verifies responses with K_enc/K_mac; fake bank without auth file cannot produce valid responses                                                                                                                                                                                                                                                                                                                                                    |
+| **Impersonation (ATM)**         | Fake ATM sends requests to Bank                 | Bank authenticates via encrypted channel (auth file) + card proof (challenge-response); both required                                                                                                                                                                                                                                                                                                                                                  |
+| **Cross-Account Access**        | Use Bob's card to access Alice's account        | card_secret = HMAC(K_card, account_name); Bob's secret ≠ Alice's secret; Bank verifies card_proof against the claimed account                                                                                                                                                                                                                                                                                                                          |
+| **Card Forgery**                | Create a fake card file                         | Requires K_card (derived from auth file); attacker without auth file cannot compute valid card_secret                                                                                                                                                                                                                                                                                                                                                  |
+| **Balance Manipulation**        | Inflate balance or withdraw more than available | All balance state is server-side only; ATM is stateless; Bank enforces `balance >= withdrawal_amount`                                                                                                                                                                                                                                                                                                                                                  |
+| **Denial of Service**           | Flood bank with connections                     | Bank handles each connection independently; invalid data triggers `protocol_error` but does NOT crash the server; 10-second timeout prevents hanging connections from resource exhaustion                                                                                                                                                                                                                                                              |
+| **Timing Attack**               | Deduce information from response timing         | Use constant-time comparison for HMAC verification (`CRYPTO_memcmp()` from OpenSSL)                                                                                                                                                                                                                                                                                                                                                                    |
+| **Overflow/Underflow**          | Malicious amounts cause arithmetic errors       | Store balances in cents as `uint64`; validate all amounts against `[0, 4294967295.99]` range; use checked arithmetic                                                                                                                                                                                                                                                                                                                                   |
+| **Auth File Reuse**             | Old auth file used with new bank instance       | Bank refuses to start if auth file exists; each run creates a fresh auth file with new K_master                                                                                                                                                                                                                                                                                                                                                        |
+| **Concurrent Transaction Race** | Two ATMs modify same account simultaneously     | Bank uses mutex/lock per account (or serial processing); atomic read-modify-write with mutex held                                                                                                                                                                                                                                                                                                                                                      |
 
 ### 11.3 Why Not Asymmetric (Public-Key) Cryptography?
 
@@ -1122,7 +1122,8 @@ Bank → ATM: E(K_enc, { type: "challenge", challenge: R_b })
 ```
 ATM → Bank: E(K_enc, { type: "request", operation: "withdraw",
              account: "bob", amount: "5000",
-             card_proof: HMAC(card_secret, R_b) })
+             card_proof: HMAC(card_secret, R_b),
+             atm_nonce: R_a })
 ```
 
 **What it prevents:**
@@ -1131,6 +1132,7 @@ ATM → Bank: E(K_enc, { type: "request", operation: "withdraw",
 - **Forgery:** MITM cannot create a valid encrypted frame without `K_enc`
 - **Account spoofing:** `card_proof` is bound to both the card secret (which the attacker doesn't have) and the fresh challenge `R_b` (which changes every session)
 - **Cross-account attack:** Bob's `card_secret ≠` Alice's `card_secret`, so Bob's proof will fail for Alice's account
+- **Response replay setup:** `R_a` is a 32-byte random nonce generated by the ATM, included inside the encrypted request. The MITM cannot read `R_a` because the request is encrypted with `K_enc`. The bank will echo `R_a` in the response, allowing the ATM to verify that the response was produced for _this specific request_
 
 **Could this be simpler?**
 
@@ -1139,13 +1141,19 @@ ATM → Bank: E(K_enc, { type: "request", operation: "withdraw",
 #### Step 3: Bank validates, applies transaction, responds
 
 ```
-Bank → ATM: E(K_enc, { status: "success", account: "bob", withdraw: 50.00 })
+Bank → ATM: E(K_enc, { status: "success", account: "bob", operation: "withdraw",
+             challenge: R_b_hex, atm_nonce: R_a, withdraw: 50.00 })
 ```
 
 **What it prevents:**
 
 - **Response forgery:** MITM cannot craft a fake "success" response to trick the ATM into thinking the transaction succeeded (or a fake "fail" to make the ATM show an error when it shouldn't)
+- **Response replay (full session replay):** The response echoes `R_a` (the ATM's own nonce), which was inside the encrypted request that the MITM cannot decrypt. Even if the MITM replays the entire captured session — first replaying an old bank challenge `R_b` to the ATM, then replaying the old response — the ATM will have generated a _fresh_ `R_a` for this session. The replayed response carries the _old_ `R_a`, which won't match, and the ATM rejects it. The challenge `R_b`, operation, and account are also verified as defence-in-depth
 - **Balance leakage:** The response is encrypted, so the MITM cannot learn the resulting balance
+
+**Why `R_a` and not just `R_b`?**
+
+- `R_b` alone is insufficient: a MITM can replay the old `R_b` challenge to the ATM (it's sent in the first message), and then replay the old response containing the same `R_b`. Both would match. `R_a` is generated by the ATM and travels only inside the encrypted request — the MITM never sees it, so it cannot construct or replay a response containing the correct `R_a`
 
 **Could this be simpler?**
 
@@ -1155,7 +1163,7 @@ Bank → ATM: E(K_enc, { status: "success", account: "bob", withdraw: 50.00 })
 
 **What they prevent:**
 
-- **Replay:** MITM records message #1 from a previous session. In a new session, sequence numbers start at 0 again, but the challenge `R_b` is different, so the replayed `card_proof` is invalid. Even within a session, replaying message #1 when the bank expects message #2 is rejected.
+- **Replay:** MITM records message #1 from a previous session. In a new session, sequence numbers start at 0 again, but the challenge `R_b` is different, so the replayed `card_proof` is invalid. Even within a session, replaying message #1 when the bank expects message #2 is rejected. On the response side, the ATM verifies its own nonce `R_a` (which was inside the encrypted request the MITM cannot read) is echoed correctly — a replayed response from a different session carries a stale `R_a` and is rejected.
 - **Reordering:** If the protocol had 4 messages and the MITM swapped messages 2 and 3, the sequence check catches it immediately.
 
 **Could this be simpler?**
@@ -1237,15 +1245,15 @@ The bank reads the 4-byte length prefix first. If it exceeds a reasonable maximu
 
 ### 12.6 Summary: Minimum Viable Security vs. Our Design
 
-| Component      | Minimum that works                    | Our design                           | Delta                                    |
-| -------------- | ------------------------------------- | ------------------------------------ | ---------------------------------------- |
-| Encryption     | AES-256-CBC + HMAC (Encrypt-then-MAC) | AES-256-GCM (AEAD)                   | Simpler API, same security               |
-| Message auth   | HMAC-SHA256 over plaintext            | GCM tag + outer HMAC                 | Outer HMAC is optional safety net        |
-| Key derivation | Use K_master directly for everything  | HKDF → K_enc, K_mac, K_card          | Prevents related-key attacks; essential  |
-| Card file      | HMAC(K_card, account)                 | Same                                 | Already minimal                          |
-| Card proof     | Send card_secret directly             | HMAC(card_secret, challenge)         | Avoids putting secret on wire; essential |
-| Anti-replay    | Fresh random challenge per session    | Challenge + seq numbers + timestamps | Seq# and timestamps are defence-in-depth |
-| Anti-DoS       | 10-second timeout + max message size  | Same + message-size cap              | Already minimal                          |
+| Component      | Minimum that works                    | Our design                                                                                                          | Delta                                                                                                                                                                                                   |
+| -------------- | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Encryption     | AES-256-CBC + HMAC (Encrypt-then-MAC) | AES-256-GCM (AEAD)                                                                                                  | Simpler API, same security                                                                                                                                                                              |
+| Message auth   | HMAC-SHA256 over plaintext            | GCM tag + outer HMAC                                                                                                | Outer HMAC is optional safety net                                                                                                                                                                       |
+| Key derivation | Use K_master directly for everything  | HKDF → K_enc, K_mac, K_card                                                                                         | Prevents related-key attacks; essential                                                                                                                                                                 |
+| Card file      | HMAC(K_card, account)                 | Same                                                                                                                | Already minimal                                                                                                                                                                                         |
+| Card proof     | Send card_secret directly             | HMAC(card_secret, challenge)                                                                                        | Avoids putting secret on wire; essential                                                                                                                                                                |
+| Anti-replay    | Fresh random challenge per session    | Challenge + seq numbers + timestamps + ATM nonce `R_a` in request echoed in response (primary response anti-replay) | `R_a` is the definitive response-binding: MITM cannot read it from the encrypted request, so cannot replay a response with the correct nonce. Bank challenge, seq#, and timestamps are defence-in-depth |
+| Anti-DoS       | 10-second timeout + max message size  | Same + message-size cap                                                                                             | Already minimal                                                                                                                                                                                         |
 
 The bold conclusion: **the design uses exactly one step above the proven minimum at each layer.** The outer HMAC and timestamps could be dropped with no loss of provable security. Everything else is necessary.
 

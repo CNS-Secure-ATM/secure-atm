@@ -61,6 +61,29 @@ void print_json_result(const json& j)
     std::cout.flush();
 }
 
+// Convert cents (uint64_t) to a lossless JSON number value.
+// Avoids double cast which loses precision above 2^53 cents.
+// Returns a json value that serializes as e.g. 1234.56 or 10.1 or 0.
+json cents_to_json(uint64_t cents) 
+{
+    std::string s = validator::format_cents_to_amount(cents);
+    
+    // Strip trailing zeros after decimal for spec-compliant output
+    // "1000.00" → "1000", "63.10" → "63.1", "43.63" → "43.63"
+    size_t dot = s.find('.');
+    if (dot != std::string::npos) {
+        size_t last = s.find_last_not_of('0');
+        if (last == dot) {
+            s.erase(dot);
+        } else {
+            s.erase(last + 1);
+        }
+    }
+    
+    // Parse as JSON number — avoids double intermediary
+    return json::parse(s);
+}
+
 // Process a single client connection
 void handle_client(int client_fd, const crypto::DerivedKeys& keys) 
 {
@@ -118,9 +141,12 @@ void handle_client(int client_fd, const crypto::DerivedKeys& keys)
         return;
     }
     
-    // Validate request structure
-    if (!request.contains("type") || request["type"] != "request" ||
-        !request.contains("operation") || !request.contains("account")) 
+    // Validate request structure and field types
+    if (!request.contains("type") || !request["type"].is_string() ||
+        request["type"] != "request" ||
+        !request.contains("operation") || !request["operation"].is_string() ||
+        !request.contains("account") || !request["account"].is_string() ||
+        !request.contains("atm_nonce") || !request["atm_nonce"].is_string()) 
     {
         close(client_fd);
         protocol_error();
@@ -129,6 +155,7 @@ void handle_client(int client_fd, const crypto::DerivedKeys& keys)
     
     std::string operation = request["operation"];
     std::string account = request["account"];
+    std::string atm_nonce = request["atm_nonce"];
     
     // Validate account name
     if (!validator::is_valid_account(account)) 
@@ -142,13 +169,19 @@ void handle_client(int client_fd, const crypto::DerivedKeys& keys)
     json response;
     response["type"] = "response";
     response["account"] = account;
+    response["operation"] = operation;
+    response["challenge"] = challenge.to_hex();
+    response["atm_nonce"] = atm_nonce;
     
     // Lock for account operations
     std::lock_guard<std::mutex> lock(g_accounts_mutex);
     
+    // Pending mutation amount - applied only after successful send (rollback on protocol error)
+    uint64_t pending_amount = 0;
+    
     if (operation == "create") {
         // Create account - no card proof needed
-        if (!request.contains("amount")) 
+        if (!request.contains("amount") || !request["amount"].is_string()) 
         {
             close(client_fd);
             protocol_error();
@@ -167,25 +200,24 @@ void handle_client(int client_fd, const crypto::DerivedKeys& keys)
         // Check account doesn't exist
         if (g_accounts.find(account) != g_accounts.end()) 
         {
-            // Account exists - send fail
+            // Account exists - business logic error, not protocol error
             response["status"] = "fail";
             session.send(response.dump());
             close(client_fd);
-            protocol_error();
             return;
         }
         
-        // Create account
-        g_accounts[account] = *cents;
+        // Defer account creation until after successful send
+        pending_amount = *cents;
         response["status"] = "success";
-        response["initial_balance"] = static_cast<double>(*cents) / 100.0;
+        response["initial_balance"] = cents_to_json(*cents);
         success = true;
         
     } 
     else if (operation == "deposit" || operation == "withdraw" || operation == "balance") 
     {
         // These require card proof
-        if (!request.contains("card_proof"))
+        if (!request.contains("card_proof") || !request["card_proof"].is_string())
         {
             close(client_fd);
             protocol_error();
@@ -208,8 +240,10 @@ void handle_client(int client_fd, const crypto::DerivedKeys& keys)
         // Verify card proof (constant time)
         if (!crypto::hmac_verify(expected_proof, card_proof)) 
         {
+            // Wrong card - business logic error, not protocol error
+            response["status"] = "fail";
+            session.send(response.dump());
             close(client_fd);
-            protocol_error();
             return;
         }
         
@@ -217,16 +251,16 @@ void handle_client(int client_fd, const crypto::DerivedKeys& keys)
         auto it = g_accounts.find(account);
         if (it == g_accounts.end()) 
         {
+            // Account not found - business logic error, not protocol error
             response["status"] = "fail";
             session.send(response.dump());
             close(client_fd);
-            protocol_error();
             return;
         }
         
         if (operation == "deposit") 
         {
-            if (!request.contains("amount")) 
+            if (!request.contains("amount") || !request["amount"].is_string()) 
             {
                 close(client_fd);
                 protocol_error();
@@ -245,22 +279,22 @@ void handle_client(int client_fd, const crypto::DerivedKeys& keys)
             // Check for overflow
             if (it->second > UINT64_MAX - *cents) 
             {
+                // Overflow - business logic error, not protocol error
                 response["status"] = "fail";
                 session.send(response.dump());
                 close(client_fd);
-                protocol_error();
                 return;
             }
             
-            it->second += *cents;
+            pending_amount = *cents;
             response["status"] = "success";
-            response["deposit"] = static_cast<double>(*cents) / 100.0;
+            response["deposit"] = cents_to_json(*cents);
             success = true;
             
         } 
         else if (operation == "withdraw") 
         {
-            if (!request.contains("amount")) 
+            if (!request.contains("amount") || !request["amount"].is_string()) 
             {
                 close(client_fd);
                 protocol_error();
@@ -279,23 +313,23 @@ void handle_client(int client_fd, const crypto::DerivedKeys& keys)
             // Check sufficient funds
             if (it->second < *cents) 
             {
+                // Insufficient funds - business logic error, not protocol error
                 response["status"] = "fail";
                 session.send(response.dump());
                 close(client_fd);
-                protocol_error();
                 return;
             }
             
-            it->second -= *cents;
+            pending_amount = *cents;
             response["status"] = "success";
-            response["withdraw"] = static_cast<double>(*cents) / 100.0;
+            response["withdraw"] = cents_to_json(*cents);
             success = true;
             
         } 
         else if (operation == "balance") 
         {
             response["status"] = "success";
-            response["balance"] = static_cast<double>(it->second) / 100.0;
+            response["balance"] = cents_to_json(it->second);
             success = true;
         }
     } 
@@ -315,6 +349,17 @@ void handle_client(int client_fd, const crypto::DerivedKeys& keys)
     }
     
     close(client_fd);
+    
+    // Commit the transaction only after successful send
+    if (success && pending_amount > 0) {
+        if (operation == "create") {
+            g_accounts[account] = pending_amount;
+        } else if (operation == "deposit") {
+            g_accounts[account] += pending_amount;
+        } else if (operation == "withdraw") {
+            g_accounts[account] -= pending_amount;
+        }
+    }
     
     // Print result on success
     if (success) 
